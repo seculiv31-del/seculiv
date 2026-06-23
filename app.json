@@ -1,0 +1,72 @@
+{
+  "expo": {
+    "name": "seculiv",
+    "slug": "seculiv",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon-only.png",
+    "scheme": "seculiv",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationAlwaysUsageDescription": "SECULIV suit ta position pendant les courses.",
+        "NSLocationWhenInUseUsageDescription": "SECULIV utilise ta position pour sécuriser la livraison."
+      }
+    },
+    "android": {
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "FOREGROUND_SERVICE"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/icon-only.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 280,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff",
+          "dark": {
+            "backgroundColor": "#ffffff"
+          }
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon-only.png",
+          "color": "#43B05C",
+          "sounds": []
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "SECULIV a besoin de ta position pour sécuriser la livraison.",
+          "locationWhenInUsePermission": "SECULIV utilise ta position pour suivre la course."
+        }
+      ],
+      "expo-audio"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

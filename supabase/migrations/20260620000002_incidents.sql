@@ -1,0 +1,16 @@
+-- Table incidents (déjà présente dans le projet) — documentation de la structure
+-- réelle en base. Appliquée via le dashboard Supabase, pas via cette migration.
+--
+-- create table public.incidents (
+--   id          uuid primary key default gen_random_uuid(),
+--   order_id    uuid references public.orders(id) on delete cascade,
+--   reported_by uuid references auth.users(id),
+--   type        incident_type not null default 'autre',
+--   status      incident_status not null,
+--   description text,
+--   created_at  timestamptz not null default now()
+-- );
+--
+-- RLS policies ajoutées via supabase db query :
+--   incidents_insert  : reported_by = auth.uid()
+--   incidents_admin_read : profile.role = 'admin'
