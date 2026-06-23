@@ -9,20 +9,13 @@ import { Logo } from '@/src/components/Logo';
 import { SectionTitle } from '@/src/components/SectionTitle';
 import { useAuth } from '@/src/lib/AuthContext';
 import { colors } from '@/src/theme/colors';
+import { PLANS } from '@/src/theme/plans';
 import { radius, spacing } from '@/src/theme/spacing';
 
-const PARCEL_TYPE_INFO = [
-  { label: 'Standard',           description: 'Colis courant, sans exigence particulière.'         },
-  { label: 'Fragile',            description: 'Manipulation avec précaution renforcée.'            },
-  { label: 'Valeur élevée',      description: 'Objet de valeur, suivi renforcé du trajet.'        },
-  { label: 'Confidentiel',       description: 'Contenu discret, accès limité au livreur assigné.' },
-  { label: 'Livraison sensible', description: 'Double vérification à la remise (renforcée).'      },
-];
-
 const SECURITY_HIGHLIGHTS = [
-  { key: 'code', icon: Shield, label: 'Code secret', tint: colors.greenSoft, iconColor: colors.green },
-  { key: 'photo', icon: Camera, label: 'Double photo', tint: colors.navySoft, iconColor: colors.white },
-  { key: 'funds', icon: CreditCard, label: 'Fonds bloqués', tint: '#F6EFD9', iconColor: colors.gold },
+  { key: 'code',  icon: Shield,    label: 'Code secret',   tint: colors.greenSoft,  iconColor: colors.green },
+  { key: 'photo', icon: Camera,    label: 'Double photo',  tint: colors.navySoft,   iconColor: colors.white },
+  { key: 'funds', icon: CreditCard,label: 'Fonds bloqués', tint: '#F6EFD9',         iconColor: colors.gold  },
 ] as const;
 
 export default function ClientHomeScreen() {
@@ -34,7 +27,6 @@ export default function ClientHomeScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
           <Logo size={80} />
-          {/* TODO Étape 6/7 : notifications réelles (commande assignée, code prêt, etc.) */}
           <Pressable style={styles.bellButton}>
             <Bell size={20} color={colors.navy} />
           </Pressable>
@@ -59,14 +51,23 @@ export default function ClientHomeScreen() {
         </View>
 
         <View>
-          <SectionTitle title="Types de colis" />
-          <View style={styles.parcelList}>
-            {PARCEL_TYPE_INFO.map((item) => (
-              <Card key={item.label} style={styles.parcelCard}>
-                <Text style={styles.parcelLabel}>{item.label}</Text>
-                <Text style={styles.parcelDescription}>{item.description}</Text>
+          <SectionTitle title="Nos formules" />
+          <View style={styles.plans}>
+            {PLANS.map((plan) => (
+              <Card key={plan.id} style={styles.planCard}>
+                <View style={styles.planHeaderLeft}>
+                  <View style={[styles.planDot, { backgroundColor: plan.color }]} />
+                  <Text style={styles.planName}>{plan.name}</Text>
+                </View>
+                {plan.includes.map((item) => (
+                  <Text key={item} style={styles.planInclude}>•  {item}</Text>
+                ))}
+                <Text style={styles.planInsurance}>{plan.insurance}</Text>
               </Card>
             ))}
+            <Text style={styles.priceNote}>
+              Le prix s'affiche après saisie des adresses, selon la distance.
+            </Text>
           </View>
         </View>
       </ScrollView>
@@ -75,96 +76,37 @@ export default function ClientHomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: colors.bg,
-  },
-  content: {
-    padding: spacing.lg,
-    paddingBottom: spacing.xxl,
-    gap: spacing.lg,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  brand: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
+  safeArea: { flex: 1, backgroundColor: colors.bg },
+  content: { padding: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.lg },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   bellButton: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.pill,
-    backgroundColor: colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 40, height: 40, borderRadius: radius.pill,
+    backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center',
   },
   hero: {
-    backgroundColor: colors.navy,
-    borderRadius: radius.lg,
-    padding: spacing.xl,
-    gap: spacing.md,
-    overflow: 'hidden',
+    backgroundColor: colors.navy, borderRadius: radius.lg,
+    padding: spacing.xl, gap: spacing.md, overflow: 'hidden',
   },
-  heroWatermark: {
-    position: 'absolute',
-    right: -24,
-    top: -24,
-    opacity: 0.12,
-  },
-  heroGreeting: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#9FB0CC',
-  },
-  heroTitle: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: colors.white,
-    maxWidth: '85%',
-  },
-  highlights: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
+  heroWatermark: { position: 'absolute', right: -24, top: -24, opacity: 0.12 },
+  heroGreeting: { fontSize: 14, fontWeight: '600', color: '#9FB0CC' },
+  heroTitle:    { fontSize: 24, fontWeight: '800', color: colors.white, maxWidth: '85%' },
+  highlights: { flexDirection: 'row', gap: spacing.sm },
   highlightCard: {
-    flex: 1,
-    backgroundColor: colors.white,
-    borderRadius: radius.md,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.sm,
-    alignItems: 'center',
-    gap: spacing.sm,
+    flex: 1, backgroundColor: colors.white, borderRadius: radius.md,
+    paddingVertical: spacing.md, paddingHorizontal: spacing.sm,
+    alignItems: 'center', gap: spacing.sm,
   },
   highlightIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.pill,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 40, height: 40, borderRadius: radius.pill,
+    alignItems: 'center', justifyContent: 'center',
   },
-  highlightLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.ink,
-    textAlign: 'center',
-  },
-  parcelList: {
-    gap: spacing.md,
-  },
-  parcelCard: {
-    gap: 4,
-  },
-  parcelLabel: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.ink,
-  },
-  parcelDescription: {
-    fontSize: 13,
-    color: colors.muted,
-  },
+  highlightLabel: { fontSize: 12, fontWeight: '600', color: colors.ink, textAlign: 'center' },
+  plans: { gap: spacing.md },
+  planCard: { gap: spacing.xs },
+  planHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.xs },
+  planDot:       { width: 10, height: 10, borderRadius: 5 },
+  planName:      { fontSize: 15, fontWeight: '700', color: colors.ink },
+  planInclude:   { fontSize: 12, color: colors.muted, lineHeight: 18 },
+  planInsurance: { fontSize: 12, fontWeight: '700', color: colors.green, marginTop: spacing.xs },
+  priceNote:     { fontSize: 12, color: colors.muted, textAlign: 'center', fontStyle: 'italic' },
 });

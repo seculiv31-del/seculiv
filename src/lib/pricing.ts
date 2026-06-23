@@ -27,6 +27,10 @@ export type PriceBreakdown = {
 
 let _cache: PricingConfig | null = null;
 
+export function clearPricingCache(): void {
+  _cache = null;
+}
+
 export async function loadPricingConfig(): Promise<PricingConfig> {
   if (_cache) return _cache;
 
