@@ -1,4 +1,3 @@
-import * as Location from 'expo-location';
 import { AudioModule, RecordingPresets, useAudioPlayer, useAudioRecorder } from 'expo-audio';
 import { router } from 'expo-router';
 import {
@@ -50,9 +49,8 @@ import { storeSecretCode } from '@/src/lib/secretCodes';
 import { supabase } from '@/src/lib/supabase';
 import { uploadVoiceGuidance } from '@/src/lib/uploadVoiceGuidance';
 import { colors } from '@/src/theme/colors';
-import { getPlan, PLANS } from '@/src/theme/plans';
 import { radius, spacing } from '@/src/theme/spacing';
-import type { ParcelType, ProtectionLevel } from '@/src/types';
+import type { ParcelType } from '@/src/types';
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -62,8 +60,7 @@ const VIOLET_SOFT = '#F0ECFA';
 const STEP_TITLES: Record<number, string> = {
   1: 'Adresses',
   2: 'Type de colis',
-  3: 'Protection',
-  4: 'Paiement & validation',
+  3: 'Paiement & validation',
 };
 
 // Centre de Dakar — position par défaut du sélecteur carte.
@@ -83,18 +80,53 @@ const ID_TYPES = [
   { value: 'permis',    label: 'Permis de conduire'               },
 ];
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Nominatim (OpenStreetMap) ───────────────────────────────────────────────
 
-// Coordonnées précises nécessaires au calcul de prix (Haversine + facteur urbain).
+const NOMINATIM_BASE = 'https://nominatim.openstreetmap.org';
+const NOMINATIM_HEADERS = { 'User-Agent': 'SECULIV/1.0 (seculiv31@gmail.com)', Accept: 'application/json' };
+
+type NominatimResult = { display_name: string; lat: string; lon: string };
+
+function shortAddress(displayName: string): string {
+  const withoutCountry = displayName.replace(/, (Sénégal|Senegal)$/, '');
+  return withoutCountry.split(',').slice(0, 3).map((s) => s.trim()).filter(Boolean).join(', ');
+}
+
 async function geocodeAddress(address: string): Promise<Coords | null> {
   try {
-    const results = await Location.geocodeAsync(`${address.trim()}, Dakar, Sénégal`);
-    if (results.length > 0) return { lat: results[0].latitude, lng: results[0].longitude };
+    const q = encodeURIComponent(`${address.trim()}, Dakar, Sénégal`);
+    const res  = await fetch(`${NOMINATIM_BASE}/search?q=${q}&format=json&limit=1&countrycodes=sn`, { headers: NOMINATIM_HEADERS });
+    const data: NominatimResult[] = await res.json();
+    if (data.length > 0) return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
     return null;
   } catch {
     return null;
   }
 }
+
+async function searchAddresses(query: string): Promise<NominatimResult[]> {
+  try {
+    const q = encodeURIComponent(`${query.trim()}, Dakar, Sénégal`);
+    const res  = await fetch(`${NOMINATIM_BASE}/search?q=${q}&format=json&limit=6&countrycodes=sn`, { headers: NOMINATIM_HEADERS });
+    return await res.json();
+  } catch {
+    return [];
+  }
+}
+
+async function reverseGeocode(lat: number, lng: number): Promise<string> {
+  try {
+    const res  = await fetch(`${NOMINATIM_BASE}/reverse?lat=${lat}&lon=${lng}&format=json`, { headers: NOMINATIM_HEADERS });
+    const data = await res.json();
+    const r    = data.address ?? {};
+    const parts = [r.road, r.quarter, r.suburb, r.neighbourhood, r.city_district, r.city].filter(Boolean);
+    return parts.slice(0, 3).join(', ');
+  } catch {
+    return '';
+  }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 // ─── Écran principal ──────────────────────────────────────────────────────────
 
@@ -117,17 +149,17 @@ export default function NewOrderScreen() {
   const [dropoffCoords, setDropoffCoords] = useState<Coords | null>(null);
 
   // Sélecteur carte (modale)
-  const [mapPickerFor,   setMapPickerFor]   = useState<'pickup' | 'dropoff' | null>(null);
-  const [mapPickerDraft, setMapPickerDraft] = useState<Coords | null>(null);
+  const [mapPickerFor,    setMapPickerFor]    = useState<'pickup' | 'dropoff' | null>(null);
+  const [mapPickerDraft,  setMapPickerDraft]  = useState<Coords | null>(null);
+  const [mapConfirming,   setMapConfirming]   = useState(false);
 
   // Tarification
   const [pricingConfig,   setPricingConfig]   = useState<PricingConfig | null>(null);
   const [priceBreakdown,  setPriceBreakdown]  = useState<PriceBreakdown | null>(null);
   const [geocodingLoading,setGeocodingLoading]= useState(false);
 
-  // Colis / protection
-  const [parcelType,       setParcelType]       = useState<ParcelType | null>(null);
-  const [protectionLevel,  setProtectionLevel]  = useState<ProtectionLevel | null>(null);
+  // Colis
+  const [parcelType, setParcelType] = useState<ParcelType | null>(null);
 
   // Champs sensible
   const [expectedIdType, setExpectedIdType] = useState<string | null>(null);
@@ -145,7 +177,6 @@ export default function NewOrderScreen() {
   const [confirmedSensible, setConfirmedSensible] = useState(false);
 
   const isSensible = parcelType === 'sensible';
-  const plan  = protectionLevel ? getPlan(protectionLevel) : null;
   const price = priceBreakdown?.total ?? 0;
 
   // Charge la config tarifaire une fois au montage
@@ -153,9 +184,17 @@ export default function NewOrderScreen() {
     loadPricingConfig().then(setPricingConfig).catch(() => {});
   }, []);
 
-  // Calcule le prix dès qu'on arrive à l'étape 4 (coords + type + config disponibles)
+  // Calcule km/min dès que les deux coords sont connues (affichage prix dans step 2)
+  const [routeInfo, setRouteInfo] = useState<{ km: number; minutes: number } | null>(null);
   useEffect(() => {
-    if (step !== 4 || !pickupCoords || !dropoffCoords || !parcelType || !pricingConfig) return;
+    if (!pickupCoords || !dropoffCoords) { setRouteInfo(null); return; }
+    const km = calculateDistance(pickupCoords, dropoffCoords);
+    setRouteInfo({ km, minutes: estimateDuration(km) });
+  }, [pickupCoords, dropoffCoords]);
+
+  // Calcule le prix dès qu'on arrive à l'étape 3 (coords + type + config disponibles)
+  useEffect(() => {
+    if (step !== 3 || !pickupCoords || !dropoffCoords || !parcelType || !pricingConfig) return;
     const km      = calculateDistance(pickupCoords, dropoffCoords);
     const minutes = estimateDuration(km);
     setPriceBreakdown(calculatePrice({ km, minutes, parcelType, config: pricingConfig }));
@@ -212,13 +251,11 @@ export default function NewOrderScreen() {
       }
     }
 
-    if (step === 3 && !protectionLevel) { setError('Choisis une formule de protection pour continuer.'); return; }
-
-    setStep((c) => Math.min(4, c + 1));
+    setStep((c) => Math.min(3, c + 1));
   }
 
   async function handleSubmit() {
-    if (!user || !parcelType || !protectionLevel || !priceBreakdown) return;
+    if (!user || !parcelType || !priceBreakdown) return;
 
     setSubmitting(true);
     setError(null);
@@ -247,7 +284,7 @@ export default function NewOrderScreen() {
           ...(dropoffCoords ? { lat: dropoffCoords.lat, lng: dropoffCoords.lng } : {}),
         },
         parcel_type:      parcelType,
-        protection_level: protectionLevel,
+        protection_level: 'standard',
         price_fcfa:       priceBreakdown.total,
         status:           'en_attente',
         payment_method:   'cash',
@@ -349,11 +386,21 @@ export default function NewOrderScreen() {
             <View style={styles.mapPickerFooter}>
               <Button
                 title="Confirmer la position"
-                disabled={!mapPickerDraft}
-                onPress={() => {
-                  if (!mapPickerDraft) return;
+                disabled={!mapPickerDraft || mapConfirming}
+                loading={mapConfirming}
+                onPress={async () => {
+                  if (!mapPickerDraft || mapConfirming) return;
+                  setMapConfirming(true);
                   if (mapPickerFor === 'pickup') setPickupCoords(mapPickerDraft);
                   else                           setDropoffCoords(mapPickerDraft);
+                  try {
+                    const addr = await reverseGeocode(mapPickerDraft.lat, mapPickerDraft.lng);
+                    if (addr) {
+                      if (mapPickerFor === 'pickup') setPickupAddress(addr);
+                      else                           setDropoffAddress(addr);
+                    }
+                  } catch { /* ignore si pas de réseau */ }
+                  setMapConfirming(false);
                   setMapPickerFor(null);
                   setError(null);
                 }}
@@ -371,10 +418,10 @@ export default function NewOrderScreen() {
               {step === 1 ? <X size={22} color={colors.ink} /> : <ArrowLeft size={22} color={colors.ink} />}
             </Pressable>
             <Text style={styles.headerTitle}>{STEP_TITLES[step]}</Text>
-            <Text style={styles.headerStep}>{step}/4</Text>
+            <Text style={styles.headerStep}>{step}/3</Text>
           </View>
           <View style={styles.progressTrack}>
-            <View style={[styles.progressFill, { width: `${step * 25}%` }]} />
+            <View style={[styles.progressFill, { width: `${Math.round(step * 100 / 3)}%` }]} />
           </View>
         </View>
 
@@ -391,9 +438,11 @@ export default function NewOrderScreen() {
               pickupCoords={pickupCoords}
               dropoffCoords={dropoffCoords}
               onPickupAddressChange={(v) => { setPickupAddress(v);  setPickupCoords(null);  }}
+              onPickupSelect={(addr, coords) => { setPickupAddress(addr);  setPickupCoords(coords);  }}
               onPickupNotesChange={setPickupNotes}
               onPickupVoiceChange={setPickupVoiceUri}
               onDropoffAddressChange={(v) => { setDropoffAddress(v); setDropoffCoords(null); }}
+              onDropoffSelect={(addr, coords) => { setDropoffAddress(addr); setDropoffCoords(coords); }}
               onDropoffNameChange={setDropoffName}
               onDropoffPhoneChange={setDropoffPhone}
               onDropoffNotesChange={setDropoffNotes}
@@ -414,27 +463,21 @@ export default function NewOrderScreen() {
               setExpectedIdName={setExpectedIdName}
               dropoffName={dropoffName}
               pricingConfig={pricingConfig}
+              routeInfo={routeInfo}
             />
           )}
 
           {step === 3 && (
-            <StepProtection protectionLevel={protectionLevel} setProtectionLevel={setProtectionLevel} />
-          )}
-
-          {step === 4 && (
             <StepPayment
               priceBreakdown={priceBreakdown}
-              pickupAddress={pickupAddress}
-              dropoffAddress={dropoffAddress}
               isSensible={isSensible}
-              pricingConfig={pricingConfig}
             />
           )}
         </ScrollView>
 
         <View style={styles.footer}>
           {error && <Text style={styles.errorText}>{error}</Text>}
-          {step < 4 ? (
+          {step < 3 ? (
             geocodingLoading ? (
               <View style={styles.geocodingRow}>
                 <ActivityIndicator size="small" color={colors.green} />
@@ -470,9 +513,11 @@ type StepAddressesProps = {
   pickupCoords: Coords | null;
   dropoffCoords: Coords | null;
   onPickupAddressChange: (v: string) => void;
+  onPickupSelect: (address: string, coords: Coords) => void;
   onPickupNotesChange: (v: string) => void;
   onPickupVoiceChange: (v: string | null) => void;
   onDropoffAddressChange: (v: string) => void;
+  onDropoffSelect: (address: string, coords: Coords) => void;
   onDropoffNameChange: (v: string) => void;
   onDropoffPhoneChange: (v: string) => void;
   onDropoffNotesChange: (v: string) => void;
@@ -487,13 +532,14 @@ function StepAddresses(p: StepAddressesProps) {
           <MapPin size={18} color={colors.navy} />
           <Text style={styles.addressTitle}>Enlèvement</Text>
         </View>
-        <TextField
+        <AddressField
           label="Adresse de récupération"
           placeholder="Ex. Sacré-Cœur 3, Dakar"
           value={p.pickupAddress}
           onChangeText={p.onPickupAddressChange}
+          onSelect={p.onPickupSelect}
         />
-        <CoordsStatus address={p.pickupAddress} coords={p.pickupCoords} onMapOpen={() => p.onMapPickerOpen('pickup')} />
+        <CoordsStatus coords={p.pickupCoords} onMapOpen={() => p.onMapPickerOpen('pickup')} />
         <TextField label="Notes (optionnel)" placeholder="Étage, portail, repère…" value={p.pickupNotes} onChangeText={p.onPickupNotesChange} />
         <VoiceRecorderWidget voiceUri={p.pickupVoiceUri} onRecorded={p.onPickupVoiceChange} />
       </Card>
@@ -503,13 +549,14 @@ function StepAddresses(p: StepAddressesProps) {
           <MapPin size={18} color={colors.green} />
           <Text style={styles.addressTitle}>Livraison</Text>
         </View>
-        <TextField
+        <AddressField
           label="Adresse de livraison"
           placeholder="Ex. Plateau, Dakar"
           value={p.dropoffAddress}
           onChangeText={p.onDropoffAddressChange}
+          onSelect={p.onDropoffSelect}
         />
-        <CoordsStatus address={p.dropoffAddress} coords={p.dropoffCoords} onMapOpen={() => p.onMapPickerOpen('dropoff')} />
+        <CoordsStatus coords={p.dropoffCoords} onMapOpen={() => p.onMapPickerOpen('dropoff')} />
         <TextField label="Nom du destinataire" placeholder="Ex. Moussa Sow" value={p.dropoffName} onChangeText={p.onDropoffNameChange} autoCapitalize="words" />
         <TextField label="Téléphone du destinataire" placeholder="77 123 45 67" value={p.dropoffPhone} onChangeText={p.onDropoffPhoneChange} keyboardType="phone-pad" />
         <TextField label="Notes (optionnel)" placeholder="Étage, portail, repère…" value={p.dropoffNotes} onChangeText={p.onDropoffNotesChange} />
@@ -518,7 +565,84 @@ function StepAddresses(p: StepAddressesProps) {
   );
 }
 
-function CoordsStatus({ address, coords, onMapOpen }: { address: string; coords: Coords | null; onMapOpen: () => void }) {
+function AddressField({
+  label,
+  placeholder,
+  value,
+  onChangeText,
+  onSelect,
+}: {
+  label: string;
+  placeholder: string;
+  value: string;
+  onChangeText: (v: string) => void;
+  onSelect: (address: string, coords: Coords) => void;
+}) {
+  const [suggestions, setSuggestions] = useState<NominatimResult[]>([]);
+  const [searching,   setSearching]   = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function handleChange(v: string) {
+    onChangeText(v);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (v.trim().length < 3) { setSuggestions([]); return; }
+    debounceRef.current = setTimeout(async () => {
+      setSearching(true);
+      const results = await searchAddresses(v);
+      setSuggestions(results);
+      setSearching(false);
+    }, 450);
+  }
+
+  function handleSelect(item: NominatimResult) {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    setSuggestions([]);
+    setSearching(false);
+    const addr = shortAddress(item.display_name);
+    onSelect(addr, { lat: parseFloat(item.lat), lng: parseFloat(item.lon) });
+  }
+
+  return (
+    <View>
+      <TextField
+        label={label}
+        placeholder={placeholder}
+        value={value}
+        onChangeText={handleChange}
+      />
+      {searching && (
+        <View style={acStyles.searchingRow}>
+          <ActivityIndicator size="small" color={colors.green} />
+          <Text style={acStyles.searchingText}>Recherche…</Text>
+        </View>
+      )}
+      {suggestions.length > 0 && (
+        <View style={acStyles.dropdown}>
+          {suggestions.map((item, idx) => {
+            const [name, ...rest] = item.display_name.replace(/, (Sénégal|Senegal)$/, '').split(',');
+            return (
+              <Pressable
+                key={idx}
+                style={[acStyles.suggestion, idx < suggestions.length - 1 && acStyles.suggestionBorder]}
+                onPress={() => handleSelect(item)}
+              >
+                <MapPin size={12} color={colors.navy} style={{ flexShrink: 0 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={acStyles.suggestionName} numberOfLines={1}>{name?.trim()}</Text>
+                  {rest.length > 0 && (
+                    <Text style={acStyles.suggestionSub} numberOfLines={1}>{rest.slice(0, 2).map(s => s.trim()).join(', ')}</Text>
+                  )}
+                </View>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
+    </View>
+  );
+}
+
+function CoordsStatus({ coords, onMapOpen }: { coords: Coords | null; onMapOpen: () => void }) {
   if (coords) {
     return (
       <View style={styles.coordsLocalized}>
@@ -527,7 +651,6 @@ function CoordsStatus({ address, coords, onMapOpen }: { address: string; coords:
       </View>
     );
   }
-  if (!address.trim()) return null;
   return (
     <Pressable style={styles.coordsMapBtn} onPress={onMapOpen}>
       <MapPin size={12} color={colors.navy} />
@@ -616,7 +739,14 @@ function VoiceRecorderWidget({ voiceUri, onRecorded }: { voiceUri: string | null
         <Text style={recStyles.doneTitle}>Guidage vocal ajouté</Text>
       </View>
       <View style={recStyles.doneActions}>
-        <Pressable style={recStyles.playBtn} onPress={() => player.playing ? player.pause() : player.play()}>
+        <Pressable style={recStyles.playBtn} onPress={() => {
+          if (player.playing) {
+            player.pause();
+          } else {
+            player.seekTo(0);
+            player.play();
+          }
+        }}>
           <Play size={14} color={colors.green} />
           <Text style={recStyles.playBtnText}>{player.playing ? 'Pause' : 'Écouter'}</Text>
         </Pressable>
@@ -669,21 +799,24 @@ type StepParcelTypeProps = {
   setExpectedIdName: (v: string) => void;
   dropoffName: string;
   pricingConfig: PricingConfig | null;
+  routeInfo: { km: number; minutes: number } | null;
 };
 
-function StepParcelType({ parcelType, setParcelType, expectedIdType, setExpectedIdType, expectedIdName, setExpectedIdName, dropoffName, pricingConfig }: StepParcelTypeProps) {
+function StepParcelType({ parcelType, setParcelType, expectedIdType, setExpectedIdType, expectedIdName, setExpectedIdName, dropoffName, pricingConfig, routeInfo }: StepParcelTypeProps) {
   const isSensible = parcelType === 'sensible';
 
   function suppLabel(value: ParcelType): string {
     if (!pricingConfig) return '';
+    if (routeInfo) {
+      const total = calculatePrice({ km: routeInfo.km, minutes: routeInfo.minutes, parcelType: value, config: pricingConfig }).total;
+      return `${total.toLocaleString('fr-FR')} F`;
+    }
     const amount = (pricingConfig as Record<string, number>)[`supp_${value}`] ?? 0;
     return amount === 0 ? 'Inclus' : `+${amount.toLocaleString('fr-FR')} F`;
   }
 
-  function suppColor(value: ParcelType): string {
-    if (!pricingConfig) return colors.muted;
-    const amount = (pricingConfig as Record<string, number>)[`supp_${value}`] ?? 0;
-    return amount === 0 ? colors.green : VIOLET;
+  function suppColor(): string {
+    return colors.navy;
   }
 
   return (
@@ -700,7 +833,7 @@ function StepParcelType({ parcelType, setParcelType, expectedIdType, setExpected
               </View>
               <View style={styles.optionRight}>
                 {pricingConfig && (
-                  <Text style={[styles.suppLabel, { color: suppColor(option.value) }]}>
+                  <Text style={[styles.suppLabel, { color: suppColor() }]}>
                     {suppLabel(option.value)}
                   </Text>
                 )}
@@ -787,44 +920,14 @@ function SensibleFeature({ text }: { text: string }) {
   );
 }
 
-// ─── Step 3 : Protection ──────────────────────────────────────────────────────
-
-function StepProtection({ protectionLevel, setProtectionLevel }: { protectionLevel: ProtectionLevel | null; setProtectionLevel: (v: ProtectionLevel) => void }) {
-  return (
-    <View style={styles.stepGap}>
-      {PLANS.map((plan) => {
-        const selected = protectionLevel === plan.id;
-        return (
-          <Pressable key={plan.id} onPress={() => setProtectionLevel(plan.id)}>
-            <Card style={[styles.planOption, selected && { borderColor: plan.color }]}>
-              <View style={styles.planOptionHeader}>
-                <Text style={styles.planOptionName}>{plan.name}</Text>
-                <Text style={styles.planOptionPrice}>{plan.price.toLocaleString('fr-FR')} F</Text>
-              </View>
-              {plan.includes.map((item) => <Text key={item} style={styles.planOptionInclude}>•  {item}</Text>)}
-              <Text style={styles.planOptionInsurance}>{plan.insurance}</Text>
-            </Card>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
-// ─── Step 4 : Paiement & récapitulatif ───────────────────────────────────────
+// ─── Step 3 : Paiement & récapitulatif ───────────────────────────────────────
 
 function StepPayment({
   priceBreakdown,
-  pickupAddress,
-  dropoffAddress,
   isSensible,
-  pricingConfig,
 }: {
   priceBreakdown: PriceBreakdown | null;
-  pickupAddress: string;
-  dropoffAddress: string;
   isSensible: boolean;
-  pricingConfig: PricingConfig | null;
 }) {
   if (!priceBreakdown) {
     return (
@@ -835,9 +938,6 @@ function StepPayment({
     );
   }
 
-  const shortPickup  = pickupAddress.split(',')[0].trim();
-  const shortDropoff = dropoffAddress.split(',')[0].trim();
-
   return (
     <View style={styles.stepGap}>
       {isSensible && (
@@ -847,29 +947,10 @@ function StepPayment({
         </View>
       )}
 
-      {/* Bandeau route */}
-      <View style={styles.routeInfo}>
-        <Text style={styles.routeText} numberOfLines={1}>{shortPickup} → {shortDropoff}</Text>
-        <Text style={styles.routeMeta}>{priceBreakdown.km.toFixed(1)} km · ~{priceBreakdown.minutes} min</Text>
-      </View>
-
       {/* Détail du prix */}
       <Card style={styles.breakdownCard}>
         <Text style={styles.breakdownTitle}>Total à régler</Text>
         <Text style={styles.breakdownTotal}>{priceBreakdown.total.toLocaleString('fr-FR')} F</Text>
-        <View style={styles.breakdownDivider} />
-        <BreakdownRow label="Prise en charge"         value={priceBreakdown.baseFare} />
-        <BreakdownRow
-          label={`Distance · ${priceBreakdown.km.toFixed(1)} km × ${pricingConfig?.price_per_km ?? 150} F`}
-          value={priceBreakdown.distanceCost}
-        />
-        <BreakdownRow
-          label={`Durée · ${priceBreakdown.minutes} min × ${pricingConfig?.price_per_min ?? 25} F`}
-          value={priceBreakdown.durationCost}
-        />
-        {priceBreakdown.supplement > 0 && (
-          <BreakdownRow label="Supplément colis" value={priceBreakdown.supplement} valueColor={VIOLET} />
-        )}
       </Card>
 
       {/* Paiement : espèces uniquement */}
@@ -951,6 +1032,18 @@ function OrderConfirmedScreen({ price, code, codeDest, isSensible, onTrack }: {
     </View>
   );
 }
+
+// ─── Styles autocomplete ─────────────────────────────────────────────────────
+
+const acStyles = StyleSheet.create({
+  searchingRow:    { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6 },
+  searchingText:   { fontSize: 12, color: colors.muted },
+  dropdown:        { borderWidth: 1, borderColor: colors.line, borderRadius: radius.md, backgroundColor: colors.white, overflow: 'hidden', marginTop: 2 },
+  suggestion:      { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: spacing.sm, paddingVertical: 10 },
+  suggestionBorder:{ borderBottomWidth: 1, borderBottomColor: colors.line },
+  suggestionName:  { fontSize: 13, fontWeight: '600', color: colors.ink },
+  suggestionSub:   { fontSize: 11, color: colors.muted, marginTop: 1 },
+});
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
@@ -1050,21 +1143,9 @@ const styles = StyleSheet.create({
   idTypeSelected:    { fontSize: 12, color: VIOLET, fontWeight: '600', marginTop: -spacing.xs },
   idNameHint:        { fontSize: 11, color: colors.muted, marginTop: -spacing.sm },
 
-  // Plans (step 3)
-  planOption:        { borderWidth: 2, borderColor: 'transparent', gap: spacing.xs },
-  planOptionHeader:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.xs },
-  planOptionName:    { fontSize: 15, fontWeight: '700', color: colors.ink },
-  planOptionPrice:   { fontSize: 15, fontWeight: '800', color: colors.navy },
-  planOptionInclude: { fontSize: 12, color: colors.muted, lineHeight: 18 },
-  planOptionInsurance: { fontSize: 12, fontWeight: '700', color: colors.green, marginTop: spacing.xs },
-
-  // Step 4 — récapitulatif
+  // Step 3 — récapitulatif
   sensibleSummaryBadge: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, backgroundColor: VIOLET_SOFT, borderRadius: radius.md, padding: spacing.md, borderWidth: 1, borderColor: '#D9CEEF' },
   sensibleSummaryText:  { fontSize: 13, fontWeight: '700', color: VIOLET },
-
-  routeInfo: { backgroundColor: colors.bg, borderRadius: radius.md, padding: spacing.md, gap: 4, borderWidth: 1, borderColor: colors.line },
-  routeText: { fontSize: 14, fontWeight: '700', color: colors.ink },
-  routeMeta: { fontSize: 12, color: colors.muted },
 
   breakdownCard:    { gap: spacing.sm },
   breakdownTitle:   { fontSize: 12, fontWeight: '700', color: colors.muted, textTransform: 'uppercase' },

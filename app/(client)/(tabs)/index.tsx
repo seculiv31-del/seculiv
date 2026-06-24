@@ -1,21 +1,84 @@
 import { router } from 'expo-router';
-import { Bell, Camera, CreditCard, Lock, Shield } from 'lucide-react-native';
+import {
+  AlertTriangle,
+  Bell,
+  Camera,
+  CheckCircle,
+  CreditCard,
+  EyeOff,
+  Gem,
+  Lock,
+  Package,
+  Shield,
+  ShieldCheck,
+  Users,
+} from 'lucide-react-native';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/src/components/Button';
-import { Card } from '@/src/components/Card';
 import { Logo } from '@/src/components/Logo';
-import { SectionTitle } from '@/src/components/SectionTitle';
 import { useAuth } from '@/src/lib/AuthContext';
 import { colors } from '@/src/theme/colors';
-import { PLANS } from '@/src/theme/plans';
 import { radius, spacing } from '@/src/theme/spacing';
 
 const SECURITY_HIGHLIGHTS = [
   { key: 'code',  icon: Shield,    label: 'Code secret',   tint: colors.greenSoft,  iconColor: colors.green },
   { key: 'photo', icon: Camera,    label: 'Double photo',  tint: colors.navySoft,   iconColor: colors.white },
   { key: 'funds', icon: CreditCard,label: 'Fonds bloqués', tint: '#F6EFD9',         iconColor: colors.gold  },
+] as const;
+
+const FORMULAS = [
+  {
+    key: 'standard',
+    icon: Package,
+    name: 'Standard',
+    description: 'Pour vos envois du quotidien sans contrainte particulière. La solution simple et efficace pour tout colis courant.',
+    advantage: 'Tarif économique · Livraison rapide',
+    target: 'Particuliers · Petits commerces',
+    tint: '#EEF2FF',
+    iconColor: '#4A5FD4',
+  },
+  {
+    key: 'fragile',
+    icon: AlertTriangle,
+    name: 'Fragile',
+    description: 'Vos objets délicats sont manipulés avec précaution renforcée à chaque étape, du départ jusqu\'à la remise.',
+    advantage: 'Manipulation douce · Emballage protégé',
+    target: 'Particuliers · Artisans · Boutiques',
+    tint: '#FFF3E0',
+    iconColor: '#E68A00',
+  },
+  {
+    key: 'value',
+    icon: Gem,
+    name: 'Valeur élevée',
+    description: 'Suivi renforcé en temps réel pour les colis de grande valeur. Livreur sélectionné, traçabilité complète du trajet.',
+    advantage: 'Traçabilité totale · Livreur vérifié',
+    target: 'Bijouteries · Banques · Particuliers (bijoux, montres)',
+    tint: '#FDF6E3',
+    iconColor: colors.gold,
+  },
+  {
+    key: 'confidentiel',
+    icon: EyeOff,
+    name: 'Confidentiel',
+    description: 'Envoi totalement discret. Accès strictement limité au livreur assigné, aucun tiers informé du contenu.',
+    advantage: 'Confidentialité totale · Accès restreint',
+    target: 'Entreprises · Notaires · Professions libérales',
+    tint: '#F0F4FF',
+    iconColor: colors.navy,
+  },
+  {
+    key: 'sensible',
+    icon: ShieldCheck,
+    name: 'Livraison sensible',
+    description: 'Double vérification obligatoire à la remise pour les envois critiques. Sécurité maximale garantie par protocole.',
+    advantage: 'Double vérification · Signature électronique',
+    target: 'Pharmacies · Hôpitaux · Laboratoires · Institutions',
+    tint: colors.greenSoft,
+    iconColor: colors.green,
+  },
 ] as const;
 
 export default function ClientHomeScreen() {
@@ -50,26 +113,34 @@ export default function ClientHomeScreen() {
           ))}
         </View>
 
-        <View>
-          <SectionTitle title="Nos formules" />
-          <View style={styles.plans}>
-            {PLANS.map((plan) => (
-              <Card key={plan.id} style={styles.planCard}>
-                <View style={styles.planHeaderLeft}>
-                  <View style={[styles.planDot, { backgroundColor: plan.color }]} />
-                  <Text style={styles.planName}>{plan.name}</Text>
+        <View style={styles.formulasSection}>
+          <Text style={styles.sectionTitle}>Nos formules de livraison</Text>
+          <Text style={styles.sectionSubtitle}>
+            Choisissez la formule adaptée à votre besoin lors de chaque envoi.
+          </Text>
+          {FORMULAS.map(({ key, icon: Icon, name, description, advantage, target, tint, iconColor }) => (
+            <View key={key} style={styles.formulaCard}>
+              <View style={styles.formulaHeader}>
+                <View style={[styles.formulaIconBadge, { backgroundColor: tint }]}>
+                  <Icon size={22} color={iconColor} />
                 </View>
-                {plan.includes.map((item) => (
-                  <Text key={item} style={styles.planInclude}>•  {item}</Text>
-                ))}
-                <Text style={styles.planInsurance}>{plan.insurance}</Text>
-              </Card>
-            ))}
-            <Text style={styles.priceNote}>
-              Le prix s'affiche après saisie des adresses, selon la distance.
-            </Text>
-          </View>
+                <Text style={styles.formulaName}>{name}</Text>
+              </View>
+              <Text style={styles.formulaDesc}>{description}</Text>
+              <View style={styles.formulaBadges}>
+                <View style={styles.formulaBadge}>
+                  <CheckCircle size={13} color={colors.green} />
+                  <Text style={styles.formulaBadgeText}>{advantage}</Text>
+                </View>
+                <View style={[styles.formulaBadge, styles.formulaBadgeTarget]}>
+                  <Users size={13} color={colors.muted} />
+                  <Text style={[styles.formulaBadgeText, styles.formulaBadgeTargetText]}>{target}</Text>
+                </View>
+              </View>
+            </View>
+          ))}
         </View>
+
       </ScrollView>
     </SafeAreaView>
   );
@@ -101,12 +172,27 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   highlightLabel: { fontSize: 12, fontWeight: '600', color: colors.ink, textAlign: 'center' },
-  plans: { gap: spacing.md },
-  planCard: { gap: spacing.xs },
-  planHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.xs },
-  planDot:       { width: 10, height: 10, borderRadius: 5 },
-  planName:      { fontSize: 15, fontWeight: '700', color: colors.ink },
-  planInclude:   { fontSize: 12, color: colors.muted, lineHeight: 18 },
-  planInsurance: { fontSize: 12, fontWeight: '700', color: colors.green, marginTop: spacing.xs },
-  priceNote:     { fontSize: 12, color: colors.muted, textAlign: 'center', fontStyle: 'italic' },
+
+  formulasSection: { gap: spacing.md },
+  sectionTitle: { fontSize: 18, fontWeight: '800', color: colors.ink },
+  sectionSubtitle: { fontSize: 13, color: colors.muted, lineHeight: 19, marginTop: -spacing.xs },
+
+  formulaCard: {
+    backgroundColor: colors.white, borderRadius: radius.lg,
+    padding: spacing.lg, gap: spacing.sm,
+  },
+  formulaHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  formulaIconBadge: {
+    width: 46, height: 46, borderRadius: radius.md,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  formulaName: { fontSize: 16, fontWeight: '700', color: colors.ink },
+  formulaDesc: { fontSize: 13, color: colors.muted, lineHeight: 20 },
+  formulaBadges: { gap: spacing.xs, marginTop: spacing.xs },
+  formulaBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+  },
+  formulaBadgeTarget: { marginTop: 2 },
+  formulaBadgeText: { fontSize: 12, fontWeight: '600', color: colors.green },
+  formulaBadgeTargetText: { color: colors.muted, fontWeight: '500' },
 });
