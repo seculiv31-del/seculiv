@@ -790,6 +790,7 @@ const sensStyles = StyleSheet.create({
 
 function VoiceGuidancePlayer({ storagePath }: { storagePath: string }) {
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
+  const [hasPlayed, setHasPlayed] = useState(false);
 
   useEffect(() => {
     supabase.storage
@@ -798,7 +799,7 @@ function VoiceGuidancePlayer({ storagePath }: { storagePath: string }) {
       .then(({ data }) => { if (data) setSignedUrl(data.signedUrl); });
   }, [storagePath]);
 
-  const player   = useAudioPlayer(signedUrl ?? '');
+  const player    = useAudioPlayer(signedUrl ?? '');
   const isPlaying = player.playing;
 
   if (!signedUrl) return null;
@@ -806,14 +807,22 @@ function VoiceGuidancePlayer({ storagePath }: { storagePath: string }) {
   return (
     <Pressable
       style={vpStyles.btn}
-      onPress={() => (isPlaying ? player.pause() : player.play())}
+      onPress={() => {
+        if (isPlaying) {
+          player.pause();
+        } else {
+          player.seekTo(0);
+          player.play();
+          setHasPlayed(true);
+        }
+      }}
     >
       {isPlaying
         ? <Pause size={16} color={colors.navy} />
         : <Play  size={16} color={colors.navy} />
       }
       <Text style={vpStyles.text}>
-        {isPlaying ? 'Pause' : "Écouter les instructions d'accès"}
+        {isPlaying ? 'Pause' : hasPlayed ? "Réécouter les instructions d'accès" : "Écouter les instructions d'accès"}
       </Text>
       <Volume2 size={14} color={colors.muted} />
     </Pressable>

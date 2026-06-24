@@ -2,12 +2,12 @@ import {
   AlertTriangle,
   Bell,
   ChevronRight,
-  CreditCard,
+  Clock,
   FileText,
   ShieldCheck,
 } from 'lucide-react-native';
 import type { ComponentType } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { LucideProps } from 'lucide-react-native';
 import { router } from 'expo-router';
@@ -16,6 +16,7 @@ import { Button } from '@/src/components/Button';
 import { Card } from '@/src/components/Card';
 import { SectionTitle } from '@/src/components/SectionTitle';
 import { useAuth } from '@/src/lib/AuthContext';
+import { deleteAccount } from '@/src/lib/admin';
 import { colors } from '@/src/theme/colors';
 import { radius, spacing } from '@/src/theme/spacing';
 
@@ -28,10 +29,10 @@ type AccountRow = {
 
 const ACCOUNT_ROWS: AccountRow[] = [
   { key: 'certificates',  label: 'Mes certificats de livraison', icon: FileText,      onPress: () => router.push('/certificates') },
+  { key: 'history',       label: 'Historique des courses',       icon: Clock,         onPress: () => router.push('/history') },
   { key: 'notifications', label: 'Notifications',                icon: Bell,          onPress: () => router.push('/notifications-settings') },
-  { key: 'payments',      label: 'Moyens de paiement',           icon: CreditCard }, // TODO
   { key: 'security',      label: 'Sécurité du compte',           icon: ShieldCheck }, // TODO
-  { key: 'incident',      label: 'Signaler un incident',         icon: AlertTriangle }, // TODO Étape 6
+  { key: 'incident',      label: 'Signaler un incident',         icon: AlertTriangle, onPress: () => router.push('/report-incident') },
 ];
 
 function getInitials(fullName: string | null): string {
@@ -42,7 +43,43 @@ function getInitials(fullName: string | null): string {
 }
 
 export default function ClientAccountScreen() {
-  const { profile, signOut } = useAuth();
+  const { profile, user, signOut } = useAuth();
+
+  function handleDeleteAccount() {
+    Alert.alert(
+      'Supprimer mon compte',
+      'Cette action est irréversible. Toutes vos données personnelles seront supprimées définitivement.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              'Confirmation finale',
+              'Êtes-vous certain(e) de vouloir supprimer votre compte SECULIV ?',
+              [
+                { text: 'Non', style: 'cancel' },
+                {
+                  text: 'Oui, supprimer',
+                  style: 'destructive',
+                  onPress: async () => {
+                    if (!user) return;
+                    const err = await deleteAccount(user.id);
+                    if (err) {
+                      Alert.alert('Erreur', err);
+                    } else {
+                      await signOut();
+                    }
+                  },
+                },
+              ]
+            );
+          },
+        },
+      ]
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -66,6 +103,12 @@ export default function ClientAccountScreen() {
         </Card>
 
         <Button title="Se déconnecter" variant="ghost" onPress={signOut} />
+        <Pressable
+          style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.7 }]}
+          onPress={handleDeleteAccount}
+        >
+          <Text style={styles.deleteBtnText}>Supprimer mon compte</Text>
+        </Pressable>
       </ScrollView>
     </SafeAreaView>
   );
@@ -158,4 +201,17 @@ const styles = StyleSheet.create({
     color: colors.ink,
   },
   rowPressed: { opacity: 0.7 },
+  deleteBtn: {
+    height: 50,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#D14343',
+  },
+  deleteBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#D14343',
+  },
 });

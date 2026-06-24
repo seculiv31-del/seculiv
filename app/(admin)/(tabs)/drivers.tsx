@@ -3,6 +3,8 @@ import { Bike, ShieldCheck, ShieldOff, Star, UserPlus } from 'lucide-react-nativ
 import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -17,6 +19,7 @@ import { SectionTitle } from '@/src/components/SectionTitle';
 import { TextField } from '@/src/components/TextField';
 import {
   createDriver,
+  deleteAccount,
   listDrivers,
   toggleDriverSuspension,
   type DriverRow,
@@ -43,6 +46,7 @@ export default function AdminDriversScreen() {
   const [formError, setFormError]   = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -86,6 +90,30 @@ export default function AdminDriversScreen() {
     await toggleDriverSuspension(driver.id, suspend);
     setTogglingId(null);
     load();
+  }
+
+  function handleDeleteDriver(driver: DriverRow) {
+    Alert.alert(
+      'Supprimer ce livreur',
+      `Supprimer définitivement le compte de ${driver.full_name ?? 'ce livreur'} ? Cette action est irréversible.`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: async () => {
+            setDeletingId(driver.profile_id);
+            const err = await deleteAccount(driver.profile_id);
+            setDeletingId(null);
+            if (err) {
+              Alert.alert('Erreur', err);
+            } else {
+              load();
+            }
+          },
+        },
+      ]
+    );
   }
 
   return (
@@ -198,12 +226,20 @@ export default function AdminDriversScreen() {
                     )}
                   </View>
 
-                  <Button
-                    title={isSuspended ? 'Réactiver' : 'Suspendre'}
-                    variant="ghost"
-                    onPress={() => handleToggleSuspend(driver)}
-                    loading={isToggling}
-                  />
+                  <View style={styles.driverActions}>
+                    <ActionButton
+                      title={isSuspended ? 'Réactiver' : 'Suspendre'}
+                      onPress={() => handleToggleSuspend(driver)}
+                      loading={isToggling}
+                      color={colors.green}
+                    />
+                    <ActionButton
+                      title="Supprimer"
+                      onPress={() => handleDeleteDriver(driver)}
+                      loading={deletingId === driver.profile_id}
+                      color="#D14343"
+                    />
+                  </View>
                 </Card>
               );
             })}
@@ -211,6 +247,21 @@ export default function AdminDriversScreen() {
         )}
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function ActionButton({ title, onPress, loading, color }: { title: string; onPress: () => void; loading: boolean; color: string }) {
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.actionBtn, { borderColor: color }, pressed && { opacity: 0.7 }]}
+      onPress={onPress}
+      disabled={loading}
+    >
+      {loading
+        ? <ActivityIndicator size="small" color={color} />
+        : <Text style={[styles.actionBtnText, { color }]}>{title}</Text>
+      }
+    </Pressable>
   );
 }
 
@@ -232,9 +283,19 @@ const styles = StyleSheet.create({
   driverInfo:  { flex: 1, gap: 2 },
   driverName:  { fontSize: 14, fontWeight: '700', color: colors.ink },
   driverSub:   { fontSize: 12, color: colors.muted },
-  driverStats: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg },
-  statItem:    { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
-  statValue:   { fontSize: 14, fontWeight: '700', color: colors.ink },
-  statDanger:  { color: '#D14343' },
-  statLabel:   { fontSize: 11, color: colors.muted },
+  driverStats:   { flexDirection: 'row', alignItems: 'center', gap: spacing.lg },
+  statItem:      { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  statValue:     { fontSize: 14, fontWeight: '700', color: colors.ink },
+  statDanger:    { color: '#D14343' },
+  statLabel:     { fontSize: 11, color: colors.muted },
+  driverActions: { flexDirection: 'row', gap: spacing.sm },
+  actionBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  actionBtnText: { fontSize: 14, fontWeight: '700' },
 });

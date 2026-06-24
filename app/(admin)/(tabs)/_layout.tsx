@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { Bike, LayoutDashboard, Package, Shield, ShieldAlert, SlidersHorizontal } from 'lucide-react-native';
+import { Bike, LayoutDashboard, Package, Shield, ShieldAlert, SlidersHorizontal, Users } from 'lucide-react-native';
 
 import { colors } from '@/src/theme/colors';
 
@@ -33,6 +33,13 @@ export default function AdminTabsLayout() {
         options={{
           title: 'Livreurs',
           tabBarIcon: ({ color, size }) => <Bike color={color} size={size} />,
+        }}
+      />
+      <Tabs.Screen
+        name="clients"
+        options={{
+          title: 'Clients',
+          tabBarIcon: ({ color, size }) => <Users color={color} size={size} />,
         }}
       />
       <Tabs.Screen

@@ -404,6 +404,69 @@ export async function toggleMonitoringRule(key: string, enabled: boolean): Promi
   return error?.message ?? null;
 }
 
+// ─── Suppression de compte ────────────────────────────────────────────────────
+
+export type ClientRow = {
+  id:         string;
+  full_name:  string | null;
+  phone:      string | null;
+  created_at: string;
+  order_count: number;
+};
+
+export async function listClients(): Promise<ClientRow[]> {
+  const { data } = await supabase
+    .from('profiles')
+    .select('id, full_name, phone, created_at')
+    .eq('role', 'client')
+    .order('created_at', { ascending: false });
+
+  if (!data) return [];
+
+  const ids = data.map((p) => p.id as string);
+  const { data: orderCounts } = await supabase
+    .from('orders')
+    .select('client_id')
+    .in('client_id', ids);
+
+  const countMap: Record<string, number> = {};
+  (orderCounts ?? []).forEach((o) => {
+    if (o.client_id) countMap[o.client_id] = (countMap[o.client_id] ?? 0) + 1;
+  });
+
+  return data.map((p: any) => ({
+    id:          p.id as string,
+    full_name:   p.full_name as string | null,
+    phone:       p.phone as string | null,
+    created_at:  p.created_at as string,
+    order_count: countMap[p.id as string] ?? 0,
+  }));
+}
+
+export async function deleteAccount(targetUserId: string): Promise<string | null> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return 'Non authentifié.';
+
+  const url = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/delete-account`;
+  const res = await fetch(url, {
+    method:  'POST',
+    headers: {
+      Authorization:  `Bearer ${session.access_token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ targetUserId }),
+  });
+
+  if (res.ok) return null;
+
+  try {
+    const body = await res.json() as { error?: string };
+    return body.error ?? `Erreur serveur (${res.status}).`;
+  } catch {
+    return `Erreur serveur (${res.status}).`;
+  }
+}
+
 // ─── Réactivation livreur suspendu ───────────────────────────────────────────
 
 export async function reactivateDriver(

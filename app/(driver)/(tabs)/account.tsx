@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { Bell, Bike, ChevronRight, ShieldCheck, ShieldX } from 'lucide-react-native';
+import { Bell, Bike, ChevronRight, Clock, ShieldCheck, ShieldX } from 'lucide-react-native';
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -92,6 +92,16 @@ export default function DriverAccountScreen() {
             <Text style={styles.rowLabel}>Vérification</Text>
             <Text style={styles.rowValue}>{driver?.is_verified ? 'Vérifié' : 'En attente'}</Text>
           </View>
+          <Pressable
+            style={({ pressed }) => [styles.row, styles.rowBorder, pressed && { opacity: 0.7 }]}
+            onPress={() => router.push('/history')}
+          >
+            <View style={styles.rowIcon}>
+              <Clock size={18} color={colors.navy} />
+            </View>
+            <Text style={styles.rowLabel}>Historique des courses</Text>
+            <ChevronRight size={18} color={colors.muted} />
+          </Pressable>
           <Pressable
             style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}
             onPress={() => router.push('/notifications-settings')}
