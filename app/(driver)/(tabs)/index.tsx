@@ -1,9 +1,15 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useAudioPlayer } from 'expo-audio';
-import { Banknote, CheckCircle2, ChevronRight, KeyRound, Lock, MapPin, MessageSquare, Navigation, Package, Pause, PenLine, Phone, Play, Radio, Shield, Volume2, VolumeX } from 'lucide-react-native';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import * as Location from 'expo-location';
+import {
+  Banknote, CheckCircle2, ChevronRight, Clock, KeyRound, Lock, MapPin,
+  MessageSquare, Navigation, Package, Pause, PenLine, Phone, Play, Radio,
+  RefreshCw, Shield, Volume2, VolumeX,
+} from 'lucide-react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Linking,
   Pressable,
@@ -34,26 +40,48 @@ import { colors } from '@/src/theme/colors';
 import { radius, spacing } from '@/src/theme/spacing';
 import type { Order } from '@/src/types';
 
-// Violet distinctif du mode sensible.
 const VIOLET = '#6B4FA8';
 const VIOLET_SOFT = '#F0ECFA';
 
-// Statuts pour lesquels le GPS est actif (économie batterie hors-course).
 const GPS_ACTIVE_STATUSES: Order['status'][] = ['enlevement', 'en_transport', 'arrivee'];
 
-// Étapes du flow sensible à l'arrivée (avant passage à 'livree').
 type SensStep = 'code_exp' | 'code_dest' | 'id_scan' | null;
 
 function formatOrderId(id: string): string { return `#${id.slice(0, 8).toUpperCase()}`; }
 function formatPrice(fcfa: number): string { return `${fcfa.toLocaleString('fr-FR')} F`; }
 
-// Bandeau instruction vocale prochaine manœuvre.
+function haversineKm(
+  a: { latitude: number; longitude: number },
+  b: { latitude: number; longitude: number },
+): number {
+  const R = 6371;
+  const dLat = ((b.latitude - a.latitude) * Math.PI) / 180;
+  const dLng = ((b.longitude - a.longitude) * Math.PI) / 180;
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((a.latitude * Math.PI) / 180) *
+    Math.cos((b.latitude * Math.PI) / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function pickupDistanceKm(
+  order: Order,
+  pos: { latitude: number; longitude: number } | null,
+): number | null {
+  if (!pos || order.pickup.lat == null || order.pickup.lng == null) return null;
+  return haversineKm(pos, { latitude: order.pickup.lat, longitude: order.pickup.lng });
+}
+
+function formatDist(km: number): string {
+  if (km < 1) return `${Math.round(km * 1000)} m`;
+  return `${km.toFixed(1)} km`;
+}
+
+// ─── Bandeau instruction vocale ──────────────────────────────────────────────
+
 function VoiceBanner({
-  instruction,
-  distanceMeters,
-  error,
-  enabled,
-  onToggle,
+  instruction, distanceMeters, error, enabled, onToggle,
 }: {
   instruction: string | null;
   distanceMeters: number | null;
@@ -82,7 +110,7 @@ function VoiceBanner({
             </>
           ) : (
             <Text style={voiceStyles.offText}>
-              {enabled ? "Calcul de l’itinéraire…" : 'Guidage vocal désactivé'}
+              {enabled ? "Calcul de l'itinéraire…" : 'Guidage vocal désactivé'}
             </Text>
           )}
         </View>
@@ -118,7 +146,8 @@ const voiceStyles = StyleSheet.create({
   },
 });
 
-// Badge "GPS actif" avec animation pulsante.
+// ─── Badge GPS pulsant ────────────────────────────────────────────────────────
+
 function GpsBadge({ isTracking }: { isTracking: boolean }) {
   const pulse = useRef(new Animated.Value(1)).current;
 
@@ -143,7 +172,6 @@ function GpsBadge({ isTracking }: { isTracking: boolean }) {
         <Radio size={12} color={colors.green} />
         <Text style={badgeStyles.gpsText}>GPS actif · diffusion toutes les 5s</Text>
       </View>
-      {/* Le moteur monitor-trip analyse les points GPS toutes les 2 min côté serveur (pg_cron). */}
       <View style={badgeStyles.ai}>
         <Shield size={12} color={colors.navy} />
         <Text style={badgeStyles.aiText}>Surveillance IA active</Text>
@@ -161,47 +189,87 @@ const badgeStyles = StyleSheet.create({
   aiText: { fontSize: 11, fontWeight: '700', color: colors.navy },
 });
 
+// ─── Écran principal ──────────────────────────────────────────────────────────
+
 export default function DriverCoursesScreen() {
   const { driver, refreshDriver } = useAuth();
-  const [orders, setOrders]         = useState<Order[]>([]);
-  const [loading, setLoading]       = useState(true);
-  const [error, setError]           = useState<string | null>(null);
-  const [codeInput, setCodeInput]   = useState('');
-  const [actionError, setActionError]   = useState<string | null>(null);
-  const [paymentError, setPaymentError] = useState<string | null>(null);
-  const [updating, setUpdating]         = useState(false);
+  const [orders, setOrders]               = useState<Order[]>([]);
+  const [availableOrders, setAvailableOrders] = useState<Order[]>([]);
+  const [driverPosition, setDriverPosition]   = useState<{ latitude: number; longitude: number } | null>(null);
+  const [loading, setLoading]             = useState(true);
+  const [error, setError]                 = useState<string | null>(null);
+  const [accepting, setAccepting]         = useState<string | null>(null);
+  const [codeInput, setCodeInput]         = useState('');
+  const [actionError, setActionError]     = useState<string | null>(null);
+  const [paymentError, setPaymentError]   = useState<string | null>(null);
+  const [updating, setUpdating]           = useState(false);
   const [paymentUpdating, setPaymentUpdating] = useState(false);
 
-  // Signature
   const [signatureStep, setSignatureStep]     = useState<'pad' | null>(null);
   const [recipientName, setRecipientName]     = useState('');
   const [signatureUploading, setSignatureUploading] = useState(false);
   const [signatureError, setSignatureError]   = useState<string | null>(null);
 
-  // Flow sensible : étape en cours à l'arrivée (avant passage livree).
   const [sensStep, setSensStep] = useState<SensStep>(null);
 
   const loadOrders = useCallback(async () => {
     if (!driver) return;
     setLoading(true);
     setError(null);
-    const { data, error: fetchError } = await supabase
-      .from('orders')
-      .select('*')
-      .eq('driver_id', driver.id)
-      .not('status', 'eq', 'annulee')
-      .or('status.neq.livree,payment_status.eq.en_attente')
-      .order('created_at', { ascending: true });
-    if (fetchError) {
-      setError('Impossible de charger tes courses. Vérifie ta connexion et réessaie.');
+
+    const [myRes, availRes] = await Promise.all([
+      supabase
+        .from('orders')
+        .select('*')
+        .eq('driver_id', driver.id)
+        .not('status', 'eq', 'annulee')
+        .or('status.neq.livree,payment_status.eq.en_attente')
+        .order('created_at', { ascending: true }),
+      supabase
+        .from('orders')
+        .select('*')
+        .eq('status', 'en_attente')
+        .is('driver_id', null)
+        .order('created_at', { ascending: true }),
+    ]);
+
+    if (myRes.error) {
+      setError('Impossible de charger les courses. Vérifie ta connexion et réessaie.');
       setLoading(false);
       return;
     }
-    setOrders((data ?? []) as Order[]);
+
+    setOrders((myRes.data ?? []) as Order[]);
+    setAvailableOrders((availRes.data ?? []) as Order[]);
     setLoading(false);
   }, [driver]);
 
-  useFocusEffect(useCallback(() => { loadOrders(); }, [loadOrders]));
+  const getDriverPosition = useCallback(async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return;
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      setDriverPosition({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+    } catch {}
+  }, []);
+
+  useFocusEffect(useCallback(() => {
+    loadOrders();
+    getDriverPosition();
+  }, [loadOrders, getDriverPosition]));
+
+  // Trie les courses disponibles par distance croissante
+  const sortedAvailableOrders = useMemo(() => {
+    if (!driverPosition) return availableOrders;
+    return [...availableOrders].sort((a, b) => {
+      const da = pickupDistanceKm(a, driverPosition);
+      const db = pickupDistanceKm(b, driverPosition);
+      if (da === null && db === null) return 0;
+      if (da === null) return 1;
+      if (db === null) return -1;
+      return da - db;
+    });
+  }, [availableOrders, driverPosition]);
 
   const inProgressOrders = orders.filter((o) => o.status !== 'assignee');
   const queuedOrders     = orders.filter((o) => o.status === 'assignee');
@@ -223,7 +291,6 @@ export default function DriverCoursesScreen() {
     voiceEnabled && isGpsActive
   );
 
-  // Reset de tout l'état de saisie quand la course change.
   useEffect(() => {
     setCodeInput('');
     setActionError(null);
@@ -231,7 +298,6 @@ export default function DriverCoursesScreen() {
     setSignatureStep(null);
     setRecipientName('');
     setSignatureError(null);
-    // Initialise l'étape sensible si on arrive sur une commande sensible à "arrivee".
     if (current?.is_sensitive && current.status === 'arrivee') {
       setSensStep('code_exp');
     } else {
@@ -239,7 +305,47 @@ export default function DriverCoursesScreen() {
     }
   }, [current?.id]);
 
-  // Avance le statut standard (assignee → enlevement → en_transport → arrivee).
+  // ── Accepter une course disponible ────────────────────────────────────────
+
+  async function handleAcceptOrder(order: Order) {
+    if (!driver) return;
+    setAccepting(order.id);
+
+    // Concurrence optimiste : on ne met à jour que si la course est encore libre
+    const { data: updated, error: updateErr } = await supabase
+      .from('orders')
+      .update({ driver_id: driver.id, status: 'assignee' })
+      .eq('id', order.id)
+      .eq('status', 'en_attente')
+      .is('driver_id', null)
+      .select();
+
+    if (updateErr || !updated || updated.length === 0) {
+      setAccepting(null);
+      Alert.alert('Course non disponible', 'Cette course vient d\'être assignée à un autre livreur. La liste a été mise à jour.');
+      await loadOrders();
+      return;
+    }
+
+    await supabase.from('drivers').update({ status: 'en_course' }).eq('id', driver.id);
+    await refreshDriver();
+
+    supabase.functions.invoke('send-push', {
+      body: {
+        profile_id: order.client_id,
+        title: '🏍️ Livreur assigné',
+        body: 'Un livreur a accepté votre commande et vient chercher votre colis.',
+        data: { orderId: order.id },
+        category: 'delivery',
+      },
+    }).catch(() => {});
+
+    setAccepting(null);
+    await loadOrders();
+  }
+
+  // ── Avancer le statut standard ────────────────────────────────────────────
+
   async function handleAdvance(order: Order) {
     const action = getDriverAction(order.status);
     if (!action || !driver) return;
@@ -252,20 +358,17 @@ export default function DriverCoursesScreen() {
       const { error: driverError } = await supabase.from('drivers').update({ status: action.nextDriverStatus }).eq('id', driver.id);
       if (driverError) {
         setUpdating(false);
-        setActionError("La commande est mise à jour mais ton statut de disponibilité n'a pas pu être changé. Mets-le à jour depuis \"Mon compte\".");
+        setActionError("La commande est mise à jour mais ton statut n'a pas pu être changé. Mets-le à jour depuis \"Mon compte\".");
         await loadOrders(); return;
       }
       await refreshDriver();
     }
 
-    // Push client : livreur en route
     if (action.nextStatus === 'en_transport') {
       supabase.functions.invoke('send-push', { body: { profile_id: order.client_id, title: '🏍️ Votre livreur arrive', body: 'Votre colis est en route. Préparez votre code secret.', data: { orderId: order.id }, category: 'proximity' } }).catch(() => {});
     }
-    // Push client : livreur arrivé
     if (action.nextStatus === 'arrivee') {
       supabase.functions.invoke('send-push', { body: { profile_id: order.client_id, title: '📍 Votre livreur est arrivé', body: 'Communiquez votre code secret au livreur pour finaliser la livraison.', data: { orderId: order.id }, category: 'delivery' } }).catch(() => {});
-      // Si commande sensible : initialise le flow renforcé
       if (order.is_sensitive) setSensStep('code_exp');
     }
 
@@ -273,7 +376,6 @@ export default function DriverCoursesScreen() {
     await loadOrders();
   }
 
-  // Valide le code unique (commandes NON sensibles).
   async function handleValidateCode(order: Order) {
     const code = codeInput.trim();
     if (code.length !== 4) { setActionError('Entre le code à 4 chiffres communiqué par le destinataire.'); return; }
@@ -290,7 +392,6 @@ export default function DriverCoursesScreen() {
     await loadOrders();
   }
 
-  // Valide un code dans le flow sensible (expediteur OU destinataire).
   async function handleValidateSensitiveCode(order: Order, codeType: 'expediteur' | 'destinataire') {
     const code = codeInput.trim();
     if (code.length !== 4) { setActionError('Entre le code à 4 chiffres.'); return; }
@@ -308,12 +409,10 @@ export default function DriverCoursesScreen() {
     if (codeType === 'expediteur') {
       setSensStep('code_dest');
     } else {
-      // Les deux codes validés → passe à la vérification d'identité.
       setSensStep('id_scan');
     }
   }
 
-  // Appelé quand IdVerification a uploadé la photo : passe le statut à 'livree'.
   async function handleIdVerified(order: Order) {
     setUpdating(true);
     const { error: updateErr } = await supabase
@@ -326,7 +425,6 @@ export default function DriverCoursesScreen() {
       return;
     }
     setSensStep(null);
-    // Push : livraison sécurisée validée
     supabase.functions.invoke('send-push', {
       body: {
         profile_id: order.client_id,
@@ -382,68 +480,220 @@ export default function DriverCoursesScreen() {
     await loadOrders();
   }
 
+  // ── Rendu ─────────────────────────────────────────────────────────────────
+
   if (loading) {
-    return <SafeAreaView style={styles.safeArea} edges={['top']}><View style={styles.centered}><ActivityIndicator color={colors.green} /></View></SafeAreaView>;
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <View style={styles.centered}><ActivityIndicator color={colors.green} /></View>
+      </SafeAreaView>
+    );
   }
+
   if (error) {
-    return <SafeAreaView style={styles.safeArea} edges={['top']}><View style={styles.centered}><Text style={styles.errorText}>{error}</Text><Button title="Réessayer" variant="ghost" onPress={loadOrders} /></View></SafeAreaView>;
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <View style={styles.centered}>
+          <Text style={styles.errorText}>{error}</Text>
+          <Button title="Réessayer" variant="ghost" onPress={loadOrders} />
+        </View>
+      </SafeAreaView>
+    );
   }
-  if (!current) {
-    return <SafeAreaView style={styles.safeArea} edges={['top']}><View style={styles.centered}><Package size={40} color={colors.muted} /><Text style={styles.emptyTitle}>Aucune course assignée</Text><Text style={styles.emptySubtitle}>Reste en ligne pour recevoir une nouvelle course.</Text></View></SafeAreaView>;
+
+  if (!current && sortedAvailableOrders.length === 0) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <View style={styles.centered}>
+          <Package size={40} color={colors.muted} />
+          <Text style={styles.emptyTitle}>Aucune course disponible</Text>
+          <Text style={styles.emptySubtitle}>Reste en ligne pour voir les nouvelles courses.</Text>
+          <Button title="Actualiser" variant="ghost" onPress={() => { loadOrders(); getDriverPosition(); }} />
+        </View>
+      </SafeAreaView>
+    );
   }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <ScrollView contentContainerStyle={styles.content}>
-        <SectionTitle title="Course en cours" />
-        <GpsBadge isTracking={isTracking} />
-        {isGpsActive && (
-          <VoiceBanner
-            instruction={nextInstruction}
-            distanceMeters={distanceToNext}
-            error={routeError}
-            enabled={voiceEnabled}
-            onToggle={() => setVoiceEnabled((v) => !v)}
-          />
+
+        {/* ── Course en cours ─────────────────────────────────────────────── */}
+        {current && (
+          <>
+            <SectionTitle title="Course en cours" />
+            <GpsBadge isTracking={isTracking} />
+            {isGpsActive && (
+              <VoiceBanner
+                instruction={nextInstruction}
+                distanceMeters={distanceToNext}
+                error={routeError}
+                enabled={voiceEnabled}
+                onToggle={() => setVoiceEnabled((v) => !v)}
+              />
+            )}
+            {isGpsActive && <DeliveryMap mode="driver" driverName="Toi" eta={eta} />}
+            <CurrentCourseCard
+              order={current}
+              codeInput={codeInput}
+              onCodeChange={setCodeInput}
+              actionError={actionError}
+              paymentError={paymentError}
+              updating={updating}
+              paymentUpdating={paymentUpdating}
+              signatureStep={signatureStep}
+              recipientName={recipientName}
+              signatureUploading={signatureUploading}
+              signatureError={signatureError}
+              sensStep={sensStep}
+              onAdvance={() => handleAdvance(current)}
+              onValidateCode={() => handleValidateCode(current)}
+              onValidateSensitiveCode={(ct) => handleValidateSensitiveCode(current, ct)}
+              onIdVerified={() => handleIdVerified(current)}
+              onIdError={(msg) => setActionError(msg)}
+              onCollect={() => handleCollect(current)}
+              onPaymentProblem={() => handlePaymentProblem(current)}
+              onPhotoSuccess={loadOrders}
+              onSignatureMethodSelect={() => setSignatureStep('pad')}
+              onRecipientNameChange={setRecipientName}
+              onSignatureOK={(b64) => handleSignatureOK(current, b64)}
+            />
+          </>
         )}
-        {isGpsActive && <DeliveryMap mode="driver" driverName="Toi" eta={eta} />}
 
-        <CurrentCourseCard
-          order={current}
-          codeInput={codeInput}
-          onCodeChange={setCodeInput}
-          actionError={actionError}
-          paymentError={paymentError}
-          updating={updating}
-          paymentUpdating={paymentUpdating}
-          signatureStep={signatureStep}
-          recipientName={recipientName}
-          signatureUploading={signatureUploading}
-          signatureError={signatureError}
-          sensStep={sensStep}
-          onAdvance={() => handleAdvance(current)}
-          onValidateCode={() => handleValidateCode(current)}
-          onValidateSensitiveCode={(ct) => handleValidateSensitiveCode(current, ct)}
-          onIdVerified={() => handleIdVerified(current)}
-          onIdError={(msg) => setActionError(msg)}
-          onCollect={() => handleCollect(current)}
-          onPaymentProblem={() => handlePaymentProblem(current)}
-          onPhotoSuccess={loadOrders}
-          onSignatureMethodSelect={() => setSignatureStep('pad')}
-          onRecipientNameChange={setRecipientName}
-          onSignatureOK={(b64) => handleSignatureOK(current, b64)}
-        />
+        {/* ── Courses disponibles (tri par distance) ──────────────────────── */}
+        {sortedAvailableOrders.length > 0 && (
+          <>
+            <View style={styles.availHeader}>
+              <SectionTitle title={`Courses disponibles · ${sortedAvailableOrders.length}`} />
+              <Pressable style={styles.refreshBtn} onPress={() => { loadOrders(); getDriverPosition(); }}>
+                <RefreshCw size={14} color={colors.muted} />
+              </Pressable>
+            </View>
+            {!driverPosition && (
+              <View style={styles.locationBanner}>
+                <MapPin size={13} color={colors.muted} />
+                <Text style={styles.locationBannerText}>Localisation en cours pour trier par distance…</Text>
+              </View>
+            )}
+            <View style={styles.availableList}>
+              {sortedAvailableOrders.map((order) => (
+                <AvailableOrderCard
+                  key={order.id}
+                  order={order}
+                  distanceKm={pickupDistanceKm(order, driverPosition)}
+                  onAccept={() => handleAcceptOrder(order)}
+                  isAccepting={accepting === order.id}
+                  driverSuspended={driver?.status === 'suspendu'}
+                />
+              ))}
+            </View>
+          </>
+        )}
 
+        {/* ── À venir (courses assignées en attente) ───────────────────────── */}
         {upcoming.length > 0 && (
-          <View>
+          <>
             <SectionTitle title="À venir" />
             <View style={styles.upcomingList}>
               {upcoming.map((order) => <UpcomingRow key={order.id} order={order} />)}
             </View>
-          </View>
+          </>
         )}
+
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+// ─── AvailableOrderCard ───────────────────────────────────────────────────────
+
+function AvailableOrderCard({
+  order, distanceKm, onAccept, isAccepting, driverSuspended,
+}: {
+  order: Order;
+  distanceKm: number | null;
+  onAccept: () => void;
+  isAccepting: boolean;
+  driverSuspended: boolean;
+}) {
+  const etaMin = distanceKm !== null
+    ? Math.max(1, Math.round((distanceKm / 30) * 60))
+    : null;
+
+  return (
+    <Card style={styles.availCard}>
+      {/* En-tête : ID + badge distance */}
+      <View style={styles.availCardHeader}>
+        <View style={styles.availCardLeft}>
+          <Text style={styles.availId}>{formatOrderId(order.id)}</Text>
+          {order.is_sensitive && (
+            <View style={styles.sensibleBadge}>
+              <Lock size={10} color={VIOLET} />
+              <Text style={styles.sensibleBadgeText}>Sensible</Text>
+            </View>
+          )}
+        </View>
+        {distanceKm !== null && (
+          <View style={styles.distBadge}>
+            <MapPin size={10} color={colors.green} />
+            <Text style={styles.distText}>{formatDist(distanceKm)}</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Tags : type + prix + ETA */}
+      <View style={styles.tagsRow}>
+        <Pill label={PARCEL_TYPE_LABELS[order.parcel_type]} tone="gray" />
+        <Pill label={formatPrice(order.price_fcfa)} tone="navy" />
+        {etaMin !== null && (
+          <View style={styles.etaBadge}>
+            <Clock size={10} color={colors.muted} />
+            <Text style={styles.etaText}>~{etaMin} min</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Itinéraire */}
+      <View style={styles.routeBlock}>
+        <View style={styles.routeRow}>
+          <View style={[styles.routeDot, styles.routeDotPickup]} />
+          <View style={styles.routeTexts}>
+            <Text style={styles.routeLabel}>Enlèvement</Text>
+            <Text style={styles.routeAddress} numberOfLines={2}>{order.pickup.address}</Text>
+            {order.pickup.notes ? (
+              <Text style={styles.routeNotes} numberOfLines={1}>{order.pickup.notes}</Text>
+            ) : null}
+          </View>
+        </View>
+        <View style={styles.routeConnector} />
+        <View style={styles.routeRow}>
+          <View style={[styles.routeDot, styles.routeDotDropoff]} />
+          <View style={styles.routeTexts}>
+            <Text style={styles.routeLabel}>Livraison</Text>
+            <Text style={styles.routeAddress} numberOfLines={2}>{order.dropoff.address}</Text>
+            <View style={styles.routeContactRow}>
+              <Text style={styles.routeContact}>{order.dropoff.name}</Text>
+              <Pressable
+                style={styles.routeCallBtn}
+                onPress={() => Linking.openURL(`tel:${order.dropoff.phone}`)}
+              >
+                <Phone size={12} color={colors.green} />
+                <Text style={styles.routePhone}>{order.dropoff.phone}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </View>
+
+      {driverSuspended ? (
+        <View style={styles.suspendedNote}>
+          <Text style={styles.suspendedNoteText}>Ton compte est suspendu. Contacte l&apos;admin pour reprendre.</Text>
+        </View>
+      ) : (
+        <Button title="Accepter cette course" onPress={onAccept} loading={isAccepting} />
+      )}
+    </Card>
   );
 }
 
@@ -496,8 +746,6 @@ function CurrentCourseCard({
 
   const buttonDisabled   = isEnlevement && !order.photo_before_url;
   const showRegularButton = !!action && !isArrivee && !isLivreePayPending;
-
-  // Le flow sensible détecte si la commande est is_sensitive et si on est à "arrivee".
   const showSensitiveFlow = order.is_sensitive && isArrivee;
 
   return (
@@ -549,10 +797,8 @@ function CurrentCourseCard({
         </View>
       </View>
 
-      {/* Étape 1 : photo avant enlèvement */}
       {isEnlevement && <PhotoCapture orderId={order.id} type="before" onSuccess={onPhotoSuccess} />}
 
-      {/* ── Flow sensible (arrivee) ───────────────────────────────────────────── */}
       {showSensitiveFlow && (
         <SensitiveDeliveryFlow
           order={order}
@@ -567,7 +813,6 @@ function CurrentCourseCard({
         />
       )}
 
-      {/* ── Flow standard : code unique à l'arrivée ─────────────────────────── */}
       {!order.is_sensitive && isArrivee && (
         <View style={styles.codeBlock}>
           <View style={styles.codeHeader}>
@@ -585,10 +830,8 @@ function CurrentCourseCard({
         </View>
       )}
 
-      {/* Étape photo après livraison */}
       {needsPhotoAfter && <PhotoCapture orderId={order.id} type="after" onSuccess={onPhotoSuccess} />}
 
-      {/* Étape signature manuscrite */}
       {needsSignature && signatureStep === null && (
         <SignatureMethodSection
           defaultName={order.dropoff.name}
@@ -609,7 +852,6 @@ function CurrentCourseCard({
         </View>
       )}
 
-      {/* Encaissement */}
       {needsPaymentConfirm && (
         <EncaissementSection
           price={order.price_fcfa}
@@ -629,7 +871,7 @@ function CurrentCourseCard({
   );
 }
 
-// ─── Flow renforcé mode sensible ─────────────────────────────────────────────
+// ─── Flow renforcé sensible ───────────────────────────────────────────────────
 
 type SensitiveDeliveryFlowProps = {
   order: Order;
@@ -657,13 +899,11 @@ function SensitiveDeliveryFlow({
 
   return (
     <View style={sensStyles.container}>
-      {/* Titre du bloc */}
       <View style={sensStyles.header}>
         <Lock size={14} color={VIOLET} />
         <Text style={sensStyles.headerTitle}>Remise sécurisée</Text>
       </View>
 
-      {/* Checklist de progression */}
       <View style={sensStyles.checklist}>
         {steps.map((s, i) => {
           const done    = i < currentIdx;
@@ -692,7 +932,6 @@ function SensitiveDeliveryFlow({
         })}
       </View>
 
-      {/* ── Étape 1 : code expéditeur ─────────────────────────────────────── */}
       {sensStep === 'code_exp' && (
         <View style={sensStyles.stepBlock}>
           <Text style={sensStyles.stepTitle}>Code expéditeur</Text>
@@ -706,15 +945,10 @@ function SensitiveDeliveryFlow({
             maxLength={4}
           />
           {actionError && <Text style={sensStyles.error}>{actionError}</Text>}
-          <Button
-            title="Valider le code expéditeur"
-            onPress={() => onValidateSensitiveCode('expediteur')}
-            loading={updating}
-          />
+          <Button title="Valider le code expéditeur" onPress={() => onValidateSensitiveCode('expediteur')} loading={updating} />
         </View>
       )}
 
-      {/* ── Étape 2 : code destinataire ───────────────────────────────────── */}
       {sensStep === 'code_dest' && (
         <View style={sensStyles.stepBlock}>
           <Text style={sensStyles.stepTitle}>Code destinataire</Text>
@@ -728,15 +962,10 @@ function SensitiveDeliveryFlow({
             maxLength={4}
           />
           {actionError && <Text style={sensStyles.error}>{actionError}</Text>}
-          <Button
-            title="Valider le code destinataire"
-            onPress={() => onValidateSensitiveCode('destinataire')}
-            loading={updating}
-          />
+          <Button title="Valider le code destinataire" onPress={() => onValidateSensitiveCode('destinataire')} loading={updating} />
         </View>
       )}
 
-      {/* ── Étape 3 : scan pièce d'identité ──────────────────────────────── */}
       {sensStep === 'id_scan' && (
         <View style={sensStyles.stepBlock}>
           <IdVerification
@@ -756,12 +985,9 @@ function SensitiveDeliveryFlow({
 
 const sensStyles = StyleSheet.create({
   container: {
-    backgroundColor: VIOLET_SOFT,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: '#D9CEEF',
-    padding: spacing.md,
-    gap: spacing.md,
+    backgroundColor: VIOLET_SOFT, borderRadius: radius.md,
+    borderWidth: 1, borderColor: '#D9CEEF',
+    padding: spacing.md, gap: spacing.md,
   },
   header: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   headerTitle: { fontSize: 13, fontWeight: '800', color: VIOLET },
@@ -786,7 +1012,7 @@ const sensStyles = StyleSheet.create({
   error:     { fontSize: 12, color: '#D14343' },
 });
 
-// ─── Lecteur guidage vocal (instructions d'accès enregistrées par le client) ──
+// ─── Lecteur guidage vocal ────────────────────────────────────────────────────
 
 function VoiceGuidancePlayer({ storagePath }: { storagePath: string }) {
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
@@ -817,10 +1043,7 @@ function VoiceGuidancePlayer({ storagePath }: { storagePath: string }) {
         }
       }}
     >
-      {isPlaying
-        ? <Pause size={16} color={colors.navy} />
-        : <Play  size={16} color={colors.navy} />
-      }
+      {isPlaying ? <Pause size={16} color={colors.navy} /> : <Play size={16} color={colors.navy} />}
       <Text style={vpStyles.text}>
         {isPlaying ? 'Pause' : hasPlayed ? "Réécouter les instructions d'accès" : "Écouter les instructions d'accès"}
       </Text>
@@ -901,7 +1124,6 @@ function SignatureMethodSection({ defaultName, recipientName, onNameChange, onSe
         </View>
         <ChevronRight size={16} color={colors.navy} />
       </Pressable>
-      {/* Code OTP SMS — désactivé (TODO: activer avec un service SMS type Twilio) */}
       <View style={[styles.sigMethodRow, styles.sigMethodDisabled]}>
         <View style={styles.sigMethodIcon}><MessageSquare size={20} color={colors.muted} /></View>
         <View style={styles.sigMethodTexts}>
@@ -939,6 +1161,67 @@ const styles = StyleSheet.create({
   errorText: { fontSize: 14, color: colors.muted, textAlign: 'center' },
   emptyTitle: { fontSize: 18, fontWeight: '800', color: colors.ink },
   emptySubtitle: { fontSize: 14, color: colors.muted, textAlign: 'center' },
+
+  // Section header avec bouton refresh
+  availHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  refreshBtn: {
+    width: 32, height: 32, borderRadius: radius.sm,
+    backgroundColor: colors.line,
+    alignItems: 'center', justifyContent: 'center',
+  },
+
+  // Bannière position en cours
+  locationBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+    backgroundColor: '#F4F5F7', borderRadius: radius.md,
+    paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+  },
+  locationBannerText: { fontSize: 12, color: colors.muted },
+
+  // Courses disponibles
+  availableList: { gap: spacing.md },
+  availCard: { gap: spacing.md },
+  availCardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  availCardLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flex: 1 },
+  availId: { fontSize: 15, fontWeight: '700', color: colors.ink },
+  distBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: colors.greenSoft, borderRadius: radius.pill,
+    paddingHorizontal: spacing.sm, paddingVertical: 4,
+    borderWidth: 1, borderColor: colors.green,
+  },
+  distText: { fontSize: 12, fontWeight: '700', color: '#2E7D43' },
+  etaBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: '#F4F5F7', borderRadius: radius.pill,
+    paddingHorizontal: spacing.sm, paddingVertical: 4,
+  },
+  etaText: { fontSize: 12, fontWeight: '600', color: colors.muted },
+
+  // Itinéraire (disponibles)
+  routeBlock: { gap: 0 },
+  routeRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+  routeDot: { width: 12, height: 12, borderRadius: 6, marginTop: 3, flexShrink: 0 },
+  routeDotPickup: { backgroundColor: colors.navy },
+  routeDotDropoff: { backgroundColor: colors.green },
+  routeConnector: {
+    width: 2, height: 18, backgroundColor: colors.line,
+    marginLeft: 5, marginVertical: 4,
+  },
+  routeTexts: { flex: 1, gap: 2, paddingBottom: spacing.xs },
+  routeLabel: { fontSize: 10, fontWeight: '700', color: colors.muted, textTransform: 'uppercase' },
+  routeAddress: { fontSize: 13, fontWeight: '600', color: colors.ink },
+  routeNotes: { fontSize: 11, color: colors.muted },
+  routeContactRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 },
+  routeContact: { fontSize: 12, fontWeight: '700', color: colors.ink },
+  routeCallBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  routePhone: { fontSize: 12, fontWeight: '700', color: colors.green },
+  suspendedNote: {
+    backgroundColor: '#FBE7E7', borderRadius: radius.md, padding: spacing.md,
+  },
+  suspendedNoteText: { fontSize: 12, color: '#D14343', fontWeight: '600' },
+
+  // Course en cours
   currentCard: { gap: spacing.md },
   currentHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   currentHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
@@ -950,7 +1233,7 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: '#D9CEEF',
   },
   sensibleBadgeText: { fontSize: 10, fontWeight: '700', color: VIOLET },
-  tagsRow: { flexDirection: 'row', gap: spacing.sm },
+  tagsRow: { flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' },
   addressBlock: { gap: spacing.md },
   addressRow: { flexDirection: 'row', gap: spacing.sm },
   addressIcon: { marginTop: 2 },
@@ -979,11 +1262,15 @@ const styles = StyleSheet.create({
   encaissMode: { fontSize: 12, color: colors.muted },
   cashBox: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, backgroundColor: colors.greenSoft, borderRadius: radius.md, padding: spacing.md },
   cashBoxText: { flex: 1, fontSize: 13, fontWeight: '600', color: '#2E7D43' },
+
+  // À venir
   upcomingList: { gap: spacing.sm },
   upcomingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   upcomingTexts: { gap: 2 },
   upcomingId: { fontSize: 14, fontWeight: '700', color: colors.ink },
   upcomingAddress: { fontSize: 12, color: colors.muted },
+
+  // Signature
   sigSection: { gap: spacing.sm },
   sigHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   sigTitle: { fontSize: 14, fontWeight: '700', color: colors.ink },

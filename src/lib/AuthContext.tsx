@@ -1,18 +1,10 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import * as Linking from 'expo-linking';
-import * as WebBrowser from 'expo-web-browser';
 import type { Session, User } from '@supabase/supabase-js';
 
 import { supabase } from '@/src/lib/supabase';
 import type { Driver, Profile } from '@/src/types';
 
-// Nécessaire sur web : ferme proprement la fenêtre/popup OAuth après le
-// redirect de retour de GitHub. Sans effet (et sans danger) sur natif et en
-// SSR (vérifie `typeof window` en interne).
-WebBrowser.maybeCompleteAuthSession();
-
 type AuthResult = { error: string | null };
-type OAuthResult = AuthResult & { cancelled?: boolean };
 
 type AuthContextValue = {
   session: Session | null;
@@ -23,9 +15,8 @@ type AuthContextValue = {
   // correspondante n'existe en base (incohérence de données).
   driverError: boolean;
   loading: boolean;
-  signIn: (email: string, password: string) => Promise<AuthResult>;
+  signIn: (phone: string, password: string) => Promise<AuthResult>;
   signUp: (email: string, password: string, fullName: string, phone: string) => Promise<AuthResult>;
-  signInWithGitHub: () => Promise<OAuthResult>;
   signOut: () => Promise<void>;
   refreshDriver: () => Promise<void>;
 };
@@ -35,10 +26,10 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 // Traduit les messages d'erreur Supabase (en anglais) en messages clairs en français.
 function translateAuthError(message: string): string {
   if (message.includes('Invalid login credentials')) {
-    return 'E-mail ou mot de passe incorrect.';
+    return 'Numéro de téléphone ou mot de passe incorrect.';
   }
   if (message.includes('already registered') || message.includes('already exists')) {
-    return 'Un compte existe déjà avec cet e-mail.';
+    return 'Un compte existe déjà avec ce numéro de téléphone.';
   }
   if (message.includes('Password should be at least')) {
     return 'Le mot de passe doit contenir au moins 8 caractères.';
@@ -149,8 +140,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setDriverError(nextDriver === null);
   }
 
-  async function signIn(email: string, password: string): Promise<AuthResult> {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+  async function signIn(phone: string, password: string): Promise<AuthResult> {
+    const { data: authEmail, error: rpcError } = await supabase
+      .rpc('get_email_by_phone', { p_phone: phone });
+
+    if (rpcError || !authEmail) {
+      return { error: 'Aucun compte trouvé avec ce numéro de téléphone.' };
+    }
+
+    const { error } = await supabase.auth.signInWithPassword({ email: authEmail, password });
     return { error: error ? translateAuthError(error.message) : null };
   }
 
@@ -178,41 +176,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: error ? translateAuthError(error.message) : null };
   }
 
-  async function signInWithGitHub(): Promise<OAuthResult> {
-    const redirectTo = Linking.createURL('auth/callback');
-
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: 'github',
-      options: { redirectTo, skipBrowserRedirect: true },
-    });
-
-    if (error || !data.url) {
-      return { error: translateAuthError(error?.message ?? 'Connexion GitHub impossible.') };
-    }
-
-    const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
-
-    if (result.type !== 'success' || !result.url) {
-      // L'utilisateur a fermé la fenêtre GitHub sans terminer la connexion.
-      return { error: null, cancelled: true };
-    }
-
-    const params = new URLSearchParams(result.url.split('#')[1] ?? '');
-    const accessToken = params.get('access_token');
-    const refreshToken = params.get('refresh_token');
-
-    if (!accessToken || !refreshToken) {
-      return { error: 'Connexion GitHub impossible. Réessaie.' };
-    }
-
-    const { error: sessionError } = await supabase.auth.setSession({
-      access_token: accessToken,
-      refresh_token: refreshToken,
-    });
-
-    return { error: sessionError ? translateAuthError(sessionError.message) : null };
-  }
-
   async function signOut() {
     await supabase.auth.signOut();
   }
@@ -228,7 +191,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loading,
         signIn,
         signUp,
-        signInWithGitHub,
         signOut,
         refreshDriver,
       }}
