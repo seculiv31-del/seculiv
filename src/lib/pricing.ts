@@ -9,7 +9,6 @@ export type PricingConfig = {
   price_per_min: number;
   minimum_fare: number;
   supp_standard: number;
-  supp_fragile: number;
   supp_valeur_elevee: number;
   supp_confidentiel: number;
   supp_sensible: number;
@@ -48,10 +47,9 @@ export async function loadPricingConfig(): Promise<PricingConfig> {
     price_per_min:     map.price_per_min     ?? 25,
     minimum_fare:      map.minimum_fare      ?? 1000,
     supp_standard:     map.supp_standard     ?? 0,
-    supp_fragile:      map.supp_fragile      ?? 200,
-    supp_valeur_elevee:map.supp_valeur_elevee?? 400,
-    supp_confidentiel: map.supp_confidentiel ?? 600,
-    supp_sensible:     map.supp_sensible     ?? 800,
+    supp_valeur_elevee:map.supp_valeur_elevee?? 200,
+    supp_confidentiel: map.supp_confidentiel ?? 400,
+    supp_sensible:     map.supp_sensible     ?? 600,
   };
 
   return _cache;

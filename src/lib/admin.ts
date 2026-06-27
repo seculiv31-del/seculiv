@@ -443,6 +443,30 @@ export async function listClients(): Promise<ClientRow[]> {
   }));
 }
 
+export async function deleteOrder(orderId: string): Promise<string | null> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return 'Non authentifié.';
+
+  const url = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/delete-order`;
+  const res = await fetch(url, {
+    method:  'POST',
+    headers: {
+      Authorization:  `Bearer ${session.access_token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ orderId }),
+  });
+
+  if (res.ok) return null;
+
+  try {
+    const body = await res.json() as { error?: string };
+    return body.error ?? `Erreur serveur (${res.status}).`;
+  } catch {
+    return `Erreur serveur (${res.status}).`;
+  }
+}
+
 export async function deleteAccount(targetUserId: string): Promise<string | null> {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) return 'Non authentifié.';

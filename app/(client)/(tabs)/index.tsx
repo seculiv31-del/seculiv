@@ -1,6 +1,5 @@
 import { router } from 'expo-router';
 import {
-  AlertTriangle,
   Bell,
   Camera,
   CheckCircle,
@@ -38,16 +37,6 @@ const FORMULAS = [
     target: 'Particuliers · Petits commerces',
     tint: '#EEF2FF',
     iconColor: '#4A5FD4',
-  },
-  {
-    key: 'fragile',
-    icon: AlertTriangle,
-    name: 'Fragile',
-    description: 'Vos objets délicats sont manipulés avec précaution renforcée à chaque étape, du départ jusqu\'à la remise.',
-    advantage: 'Manipulation douce · Emballage protégé',
-    target: 'Particuliers · Artisans · Boutiques',
-    tint: '#FFF3E0',
-    iconColor: '#E68A00',
   },
   {
     key: 'value',

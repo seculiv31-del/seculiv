@@ -27,7 +27,6 @@ type Fields = {
   price_per_min:      string;
   minimum_fare:       string;
   supp_standard:      string;
-  supp_fragile:       string;
   supp_valeur_elevee: string;
   supp_confidentiel:  string;
   supp_sensible:      string;
@@ -35,7 +34,7 @@ type Fields = {
 
 const FIELD_KEYS = [
   'base_fare', 'price_per_km', 'price_per_min', 'minimum_fare',
-  'supp_standard', 'supp_fragile', 'supp_valeur_elevee', 'supp_confidentiel', 'supp_sensible',
+  'supp_standard', 'supp_valeur_elevee', 'supp_confidentiel', 'supp_sensible',
 ] as const;
 
 const DEFAULT_FIELDS: Fields = {
@@ -44,10 +43,9 @@ const DEFAULT_FIELDS: Fields = {
   price_per_min:      '25',
   minimum_fare:       '1000',
   supp_standard:      '0',
-  supp_fragile:       '200',
-  supp_valeur_elevee: '400',
-  supp_confidentiel:  '600',
-  supp_sensible:      '800',
+  supp_valeur_elevee: '200',
+  supp_confidentiel:  '400',
+  supp_sensible:      '600',
 };
 
 export default function AdminPricingScreen() {
@@ -185,13 +183,6 @@ export default function AdminPricingScreen() {
               />
               <Separator />
               <FieldRow
-                label="Fragile"
-                unit="F"
-                value={fields.supp_fragile}
-                onChangeText={(v) => setField('supp_fragile', v)}
-              />
-              <Separator />
-              <FieldRow
                 label="Valeur élevée"
                 unit="F"
                 value={fields.supp_valeur_elevee}
@@ -280,7 +271,6 @@ function PriceSimulator({ fields }: { fields: Fields }) {
 
   const rows = [
     { label: 'Standard',           supp: Number(fields.supp_standard)      || 0 },
-    { label: 'Fragile',            supp: Number(fields.supp_fragile)        || 0 },
     { label: 'Valeur élevée',      supp: Number(fields.supp_valeur_elevee)  || 0 },
     { label: 'Confidentiel',       supp: Number(fields.supp_confidentiel)   || 0 },
     { label: 'Livraison sensible', supp: Number(fields.supp_sensible)       || 0 },

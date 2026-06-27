@@ -3,7 +3,6 @@ import type { OrderStatus, ParcelType } from '@/src/types';
 
 export const PARCEL_TYPE_LABELS: Record<ParcelType, string> = {
   standard: 'Standard',
-  fragile: 'Fragile',
   valeur_elevee: 'Valeur élevée',
   confidentiel: 'Confidentiel',
   sensible: 'Livraison sensible',

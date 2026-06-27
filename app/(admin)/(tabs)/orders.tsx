@@ -1,6 +1,7 @@
 import { useFocusEffect } from '@react-navigation/native';
-import { CheckCircle, Eye, FileDown, Lock } from 'lucide-react-native';
-import { useCallback, useState } from 'react';
+import { CheckCircle, Eye, FileDown, Lock, Trash2 } from 'lucide-react-native';
+import { useCallback, useEffect, useState } from 'react';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import {
   ActivityIndicator,
   Alert,
@@ -18,6 +19,7 @@ import { Pill } from '@/src/components/Pill';
 import { SectionTitle } from '@/src/components/SectionTitle';
 import {
   assignOrder,
+  deleteOrder,
   listAssignableDrivers,
   listOrders,
   type AssignableDriver,
@@ -63,6 +65,7 @@ export default function AdminOrdersScreen() {
   const [assigning, setAssigning]   = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
   const [certLoadingId, setCertLoadingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   // ID de la commande dont on charge la photo de pièce d'identité (admin uniquement).
   const [idViewLoadingId, setIdViewLoadingId] = useState<string | null>(null);
 
@@ -76,6 +79,25 @@ export default function AdminOrdersScreen() {
   }, [filter]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // Realtime : l'admin voit les nouvelles commandes et changements de statut
+  // sans avoir à actualiser manuellement.
+  useEffect(() => {
+    let channel: RealtimeChannel | null = null;
+
+    channel = supabase
+      .channel('admin-orders-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'orders' },
+        () => { load(); }
+      )
+      .subscribe();
+
+    return () => {
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [load]);
 
   async function openAssign(orderId: string) {
     setAssigningId(orderId);
@@ -132,6 +154,31 @@ export default function AdminOrdersScreen() {
     } finally {
       setIdViewLoadingId(null);
     }
+  }
+
+  function handleDeleteOrder(order: OrderRow) {
+    const inProgress = ['assignee', 'en_transport', 'enlevement', 'arrivee'].includes(order.status);
+    const message = inProgress
+      ? `Supprimer définitivement la course ${formatOrderId(order.id)} ? Elle est actuellement en cours — le livreur sera remis hors ligne. Cette action est irréversible.`
+      : `Supprimer définitivement la course ${formatOrderId(order.id)} ? Cette action est irréversible.`;
+
+    Alert.alert('Supprimer la course', message, [
+      { text: 'Annuler', style: 'cancel' },
+      {
+        text: 'Supprimer',
+        style: 'destructive',
+        onPress: async () => {
+          setDeletingId(order.id);
+          const err = await deleteOrder(order.id);
+          setDeletingId(null);
+          if (err) {
+            Alert.alert('Erreur', err);
+          } else {
+            load();
+          }
+        },
+      },
+    ]);
   }
 
   async function handleAssign(orderId: string, driverId: string) {
@@ -263,6 +310,19 @@ export default function AdminOrdersScreen() {
                         </Text>
                       </Pressable>
                     )}
+                    <Pressable
+                      style={({ pressed }) => [styles.deleteOrderBtn, pressed && styles.deleteOrderBtnPressed, deletingId === order.id && styles.deleteOrderBtnDisabled]}
+                      onPress={() => handleDeleteOrder(order)}
+                      disabled={deletingId === order.id}
+                    >
+                      {deletingId === order.id
+                        ? <ActivityIndicator size="small" color="#D14343" />
+                        : <Trash2 size={14} color="#D14343" />
+                      }
+                      <Text style={styles.deleteOrderBtnText}>
+                        {deletingId === order.id ? 'Suppression…' : 'Supprimer la course'}
+                      </Text>
+                    </Pressable>
                   </Card>
 
                   {/* Panel d'assignation inline */}
@@ -382,4 +442,18 @@ const styles = StyleSheet.create({
   idBtnPressed:  { opacity: 0.7 },
   idBtnDisabled: { opacity: 0.5 },
   idBtnText: { fontSize: 13, fontWeight: '600', color: VIOLET },
+  deleteOrderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: '#D14343',
+    marginTop: spacing.xs,
+  },
+  deleteOrderBtnPressed:  { opacity: 0.7 },
+  deleteOrderBtnDisabled: { opacity: 0.5 },
+  deleteOrderBtnText: { fontSize: 13, fontWeight: '600', color: '#D14343' },
 });
