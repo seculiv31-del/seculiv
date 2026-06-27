@@ -1,4 +1,5 @@
 import { useFocusEffect } from '@react-navigation/native';
+import * as Notifications from 'expo-notifications';
 import { router } from 'expo-router';
 import { CheckCircle2, Circle, Clock, FileDown, KeyRound, MapPin } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -60,6 +61,9 @@ export default function ClientTrackScreen() {
   const [error, setError] = useState<string | null>(null);
   const [secretCodes, setSecretCodes] = useState<Record<string, string | null>>({});
   const [photoUrls, setPhotoUrls] = useState<Record<string, PhotoUrls>>({});
+
+  // Évite les doublons de notification si le Realtime fire plusieurs fois.
+  const notifiedOrdersRef = useRef<Set<string>>(new Set());
 
   const loadOrders = useCallback(async () => {
     if (!user) return;
@@ -126,6 +130,46 @@ export default function ClientTrackScreen() {
       setSecretCodes(Object.fromEntries(codeOrderIds.map((id, index) => [id, codes[index]])));
     });
   }, [orders]);
+
+  // Notification locale avec le code quand le livreur marque "livré".
+  // La notification disparaît automatiquement après 10 minutes.
+  useEffect(() => {
+    if (!user) return;
+
+    const channel = supabase
+      .channel('client-orders-livree')
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'orders', filter: `client_id=eq.${user.id}` },
+        async (payload) => {
+          const updated = payload.new as Order;
+          if (updated.status !== 'livree') return;
+          if (notifiedOrdersRef.current.has(updated.id)) return;
+          notifiedOrdersRef.current.add(updated.id);
+
+          const code = await getSecretCode(updated.id);
+          if (!code) return;
+
+          const notifId = await Notifications.scheduleNotificationAsync({
+            content: {
+              title: '📦 Votre colis est arrivé !',
+              body: `Votre code de remise : ${code.split('').join(' — ')}`,
+              data: { orderId: updated.id, screen: 'track' },
+            },
+            trigger: null,
+          });
+
+          setTimeout(() => {
+            Notifications.dismissNotificationAsync(notifId).catch(() => {});
+          }, 10 * 60 * 1000);
+
+          await loadOrders();
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [user, loadOrders]);
 
   if (loading) {
     return (
@@ -290,6 +334,16 @@ function ActiveOrderCard({
           <DeliveryMap
             mode="client"
             driverPosition={driverPosition}
+            pickup={
+              order.pickup.lat != null && order.pickup.lng != null
+                ? { lat: order.pickup.lat, lng: order.pickup.lng }
+                : undefined
+            }
+            dropoff={
+              order.dropoff.lat != null && order.dropoff.lng != null
+                ? { lat: order.dropoff.lat, lng: order.dropoff.lng, address: order.dropoff.address }
+                : undefined
+            }
             eta={order.eta_minutes}
             lastUpdatedAt={driverPosition.updatedAt}
           />
