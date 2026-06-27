@@ -7,6 +7,7 @@ import {
   RefreshCw, Shield, Volume2, VolumeX,
 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import {
   ActivityIndicator,
   Alert,
@@ -239,6 +240,12 @@ export default function DriverCoursesScreen() {
       return;
     }
 
+    if (availRes.error) {
+      setError('Impossible de charger les courses disponibles. Vérifie ta connexion et réessaie.');
+      setLoading(false);
+      return;
+    }
+
     setOrders((myRes.data ?? []) as Order[]);
     setAvailableOrders((availRes.data ?? []) as Order[]);
     setLoading(false);
@@ -257,6 +264,27 @@ export default function DriverCoursesScreen() {
     loadOrders();
     getDriverPosition();
   }, [loadOrders, getDriverPosition]));
+
+  // Abonnement realtime : recharge automatiquement quand une commande est
+  // créée ou modifiée (nouveau client, livreur qui accepte, etc.)
+  useEffect(() => {
+    if (!driver) return;
+
+    let channel: RealtimeChannel | null = null;
+
+    channel = supabase
+      .channel('driver-orders-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'orders' },
+        () => { loadOrders(); }
+      )
+      .subscribe();
+
+    return () => {
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [driver, loadOrders]);
 
   // Trie les courses disponibles par distance croissante
   const sortedAvailableOrders = useMemo(() => {
@@ -532,7 +560,30 @@ export default function DriverCoursesScreen() {
                 onToggle={() => setVoiceEnabled((v) => !v)}
               />
             )}
-            {isGpsActive && <DeliveryMap mode="driver" driverName="Toi" eta={eta} />}
+            {isGpsActive && (
+              <DeliveryMap
+                mode="driver"
+                driverName="Toi"
+                eta={eta}
+                driverPosition={
+                  currentPosition
+                    ? { lat: currentPosition.latitude, lng: currentPosition.longitude }
+                    : undefined
+                }
+                pickup={
+                  current.pickup.lat != null && current.pickup.lng != null
+                    ? { lat: current.pickup.lat, lng: current.pickup.lng }
+                    : undefined
+                }
+                dropoff={
+                  current.dropoff.lat != null && current.dropoff.lng != null
+                    ? { lat: current.dropoff.lat, lng: current.dropoff.lng, address: current.dropoff.address }
+                    : destinationCoords
+                      ? { lat: destinationCoords.latitude, lng: destinationCoords.longitude, address: current.dropoff.address }
+                      : undefined
+                }
+              />
+            )}
             <CurrentCourseCard
               order={current}
               codeInput={codeInput}
@@ -778,7 +829,10 @@ function CurrentCourseCard({
           </View>
         </View>
         {order.pickup.voice_guidance_url && (
-          <VoiceGuidancePlayer storagePath={order.pickup.voice_guidance_url} />
+          <VoiceGuidancePlayer
+            storagePath={order.pickup.voice_guidance_url}
+            label="instructions d'accès (enlèvement)"
+          />
         )}
         <View style={styles.addressRow}>
           <MapPin size={18} color={colors.green} style={styles.addressIcon} />
@@ -795,6 +849,12 @@ function CurrentCourseCard({
             </View>
           </View>
         </View>
+        {order.dropoff.voice_guidance_url && (
+          <VoiceGuidancePlayer
+            storagePath={order.dropoff.voice_guidance_url}
+            label="Message vocal de l'expéditeur"
+          />
+        )}
       </View>
 
       {isEnlevement && <PhotoCapture orderId={order.id} type="before" onSuccess={onPhotoSuccess} />}
@@ -1014,7 +1074,7 @@ const sensStyles = StyleSheet.create({
 
 // ─── Lecteur guidage vocal ────────────────────────────────────────────────────
 
-function VoiceGuidancePlayer({ storagePath }: { storagePath: string }) {
+function VoiceGuidancePlayer({ storagePath, label }: { storagePath: string; label?: string }) {
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
   const [hasPlayed, setHasPlayed] = useState(false);
 
@@ -1045,7 +1105,12 @@ function VoiceGuidancePlayer({ storagePath }: { storagePath: string }) {
     >
       {isPlaying ? <Pause size={16} color={colors.navy} /> : <Play size={16} color={colors.navy} />}
       <Text style={vpStyles.text}>
-        {isPlaying ? 'Pause' : hasPlayed ? "Réécouter les instructions d'accès" : "Écouter les instructions d'accès"}
+        {isPlaying
+          ? 'Pause'
+          : hasPlayed
+            ? `Réécouter : ${label ?? "instructions d'accès"}`
+            : `Écouter : ${label ?? "instructions d'accès"}`
+        }
       </Text>
       <Volume2 size={14} color={colors.muted} />
     </Pressable>

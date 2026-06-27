@@ -23,7 +23,7 @@ export type PushToken = {
   created_at: string;
 };
 
-export type ParcelType = 'standard' | 'fragile' | 'valeur_elevee' | 'confidentiel' | 'sensible';
+export type ParcelType = 'standard' | 'valeur_elevee' | 'confidentiel' | 'sensible';
 
 export type ProtectionLevel = 'standard' | 'securise' | 'premium';
 
@@ -52,6 +52,7 @@ export type OrderDropoff = {
   name: string;
   phone: string;
   notes?: string;
+  voice_guidance_url?: string;
   lat?: number;
   lng?: number;
 };

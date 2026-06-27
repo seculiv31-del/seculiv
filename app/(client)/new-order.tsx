@@ -22,7 +22,6 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -30,8 +29,8 @@ import {
   Text,
   View,
 } from 'react-native';
-import MapView, { Marker } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import MapPickerModal from '@/src/components/MapPickerModal';
 
 import { Button } from '@/src/components/Button';
 import { Card } from '@/src/components/Card';
@@ -68,7 +67,6 @@ const DAKAR: { latitude: number; longitude: number } = { latitude: 14.7167, long
 
 const PARCEL_TYPE_OPTIONS: { value: ParcelType; label: string; description: string }[] = [
   { value: 'standard',      label: 'Standard',           description: 'Colis courant, sans exigence particulière.'         },
-  { value: 'fragile',       label: 'Fragile',            description: 'Manipulation avec précaution renforcée.'           },
   { value: 'valeur_elevee', label: 'Valeur élevée',      description: 'Objet de valeur, suivi renforcé du trajet.'       },
   { value: 'confidentiel',  label: 'Confidentiel',       description: 'Contenu discret, accès limité au livreur assigné.' },
   { value: 'sensible',      label: 'Livraison sensible', description: 'Double vérification à la remise (renforcée).'     },
@@ -142,16 +140,15 @@ export default function NewOrderScreen() {
   const [dropoffName,    setDropoffName]    = useState('');
   const [dropoffPhone,   setDropoffPhone]   = useState('');
   const [dropoffNotes,   setDropoffNotes]   = useState('');
-  const [pickupVoiceUri, setPickupVoiceUri] = useState<string | null>(null);
+  const [pickupVoiceUri,  setPickupVoiceUri]  = useState<string | null>(null);
+  const [dropoffVoiceUri, setDropoffVoiceUri] = useState<string | null>(null);
 
   // Coordonnées — effacées dès que le texte d'adresse change
   const [pickupCoords,  setPickupCoords]  = useState<Coords | null>(null);
   const [dropoffCoords, setDropoffCoords] = useState<Coords | null>(null);
 
   // Sélecteur carte (modale)
-  const [mapPickerFor,    setMapPickerFor]    = useState<'pickup' | 'dropoff' | null>(null);
-  const [mapPickerDraft,  setMapPickerDraft]  = useState<Coords | null>(null);
-  const [mapConfirming,   setMapConfirming]   = useState(false);
+  const [mapPickerFor, setMapPickerFor] = useState<'pickup' | 'dropoff' | null>(null);
 
   // Tarification
   const [pricingConfig,   setPricingConfig]   = useState<PricingConfig | null>(null);
@@ -228,14 +225,12 @@ export default function NewOrderScreen() {
           setPickupCoords(null);
           setError("Adresse d'enlèvement introuvable. Précisez-la sur la carte.");
           setMapPickerFor('pickup');
-          setMapPickerDraft(null);
           return;
         }
         if (!dC) {
           setDropoffCoords(null);
           setError('Adresse de livraison introuvable. Précisez-la sur la carte.');
           setMapPickerFor('dropoff');
-          setMapPickerDraft(null);
           return;
         }
         setPickupCoords(pC);
@@ -266,6 +261,12 @@ export default function NewOrderScreen() {
       if ('path' in uploadResult) voiceGuidancePath = uploadResult.path;
     }
 
+    let dropoffVoicePath: string | undefined;
+    if (dropoffVoiceUri) {
+      const uploadResult = await uploadVoiceGuidance(dropoffVoiceUri);
+      if ('path' in uploadResult) dropoffVoicePath = uploadResult.path;
+    }
+
     const { data: newOrder, error: insertError } = await supabase
       .from('orders')
       .insert({
@@ -277,10 +278,11 @@ export default function NewOrderScreen() {
           ...(pickupCoords  ? { lat: pickupCoords.lat,  lng: pickupCoords.lng  } : {}),
         },
         dropoff: {
-          address: dropoffAddress.trim(),
-          name:    dropoffName.trim(),
-          phone:   dropoffPhone.trim(),
-          notes:   dropoffNotes.trim() || undefined,
+          address:            dropoffAddress.trim(),
+          name:               dropoffName.trim(),
+          phone:              dropoffPhone.trim(),
+          notes:              dropoffNotes.trim() || undefined,
+          voice_guidance_url: dropoffVoicePath,
           ...(dropoffCoords ? { lat: dropoffCoords.lat, lng: dropoffCoords.lng } : {}),
         },
         parcel_type:      parcelType,
@@ -346,69 +348,26 @@ export default function NewOrderScreen() {
 
       {/* Sélecteur carte (modale) */}
       {mapPickerFor !== null && (
-        <Modal visible animationType="slide" onRequestClose={() => setMapPickerFor(null)}>
-          <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
-            <View style={styles.mapPickerHeader}>
-              <Pressable onPress={() => setMapPickerFor(null)} style={styles.iconButton}>
-                <X size={22} color={colors.ink} />
-              </Pressable>
-              <Text style={styles.mapPickerTitle}>
-                {mapPickerFor === 'pickup' ? "Point d'enlèvement" : 'Point de livraison'}
-              </Text>
-              <View style={{ width: 40 }} />
-            </View>
-            <Text style={styles.mapPickerHint}>Appuyez sur la carte ou faites glisser le marqueur.</Text>
-            <MapView
-              style={{ flex: 1 }}
-              initialRegion={{
-                latitude:       mapPickerDraft?.lat ?? DAKAR.latitude,
-                longitude:      mapPickerDraft?.lng ?? DAKAR.longitude,
-                latitudeDelta:  0.08,
-                longitudeDelta: 0.08,
-              }}
-              onPress={(e) => setMapPickerDraft({
-                lat: e.nativeEvent.coordinate.latitude,
-                lng: e.nativeEvent.coordinate.longitude,
-              })}
-            >
-              {mapPickerDraft && (
-                <Marker
-                  coordinate={{ latitude: mapPickerDraft.lat, longitude: mapPickerDraft.lng }}
-                  draggable
-                  pinColor={mapPickerFor === 'pickup' ? colors.navy : colors.green}
-                  onDragEnd={(e) => setMapPickerDraft({
-                    lat: e.nativeEvent.coordinate.latitude,
-                    lng: e.nativeEvent.coordinate.longitude,
-                  })}
-                />
-              )}
-            </MapView>
-            <View style={styles.mapPickerFooter}>
-              <Button
-                title="Confirmer la position"
-                disabled={!mapPickerDraft || mapConfirming}
-                loading={mapConfirming}
-                onPress={async () => {
-                  if (!mapPickerDraft || mapConfirming) return;
-                  setMapConfirming(true);
-                  if (mapPickerFor === 'pickup') setPickupCoords(mapPickerDraft);
-                  else                           setDropoffCoords(mapPickerDraft);
-                  try {
-                    const addr = await reverseGeocode(mapPickerDraft.lat, mapPickerDraft.lng);
-                    if (addr) {
-                      if (mapPickerFor === 'pickup') setPickupAddress(addr);
-                      else                           setDropoffAddress(addr);
-                    }
-                  } catch { /* ignore si pas de réseau */ }
-                  setMapConfirming(false);
-                  setMapPickerFor(null);
-                  setError(null);
-                }}
-              />
-              <Button title="Annuler" variant="ghost" onPress={() => setMapPickerFor(null)} />
-            </View>
-          </SafeAreaView>
-        </Modal>
+        <MapPickerModal
+          visible
+          type={mapPickerFor}
+          initialCoords={mapPickerFor === 'pickup' ? (pickupCoords ?? undefined) : (dropoffCoords ?? undefined)}
+          reverseGeocode={reverseGeocode}
+          onClose={() => setMapPickerFor(null)}
+          onConfirm={async (coords, geocode) => {
+            if (mapPickerFor === 'pickup') setPickupCoords(coords);
+            else                           setDropoffCoords(coords);
+            try {
+              const addr = await geocode(coords.lat, coords.lng);
+              if (addr) {
+                if (mapPickerFor === 'pickup') setPickupAddress(addr);
+                else                           setDropoffAddress(addr);
+              }
+            } catch { /* ignore si pas de réseau */ }
+            setMapPickerFor(null);
+            setError(null);
+          }}
+        />
       )}
 
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -435,6 +394,7 @@ export default function NewOrderScreen() {
               dropoffName={dropoffName}
               dropoffPhone={dropoffPhone}
               dropoffNotes={dropoffNotes}
+              dropoffVoiceUri={dropoffVoiceUri}
               pickupCoords={pickupCoords}
               dropoffCoords={dropoffCoords}
               onPickupAddressChange={(v) => { setPickupAddress(v);  setPickupCoords(null);  }}
@@ -446,10 +406,8 @@ export default function NewOrderScreen() {
               onDropoffNameChange={setDropoffName}
               onDropoffPhoneChange={setDropoffPhone}
               onDropoffNotesChange={setDropoffNotes}
-              onMapPickerOpen={(target) => {
-                setMapPickerFor(target);
-                setMapPickerDraft(target === 'pickup' ? pickupCoords : dropoffCoords);
-              }}
+              onDropoffVoiceChange={setDropoffVoiceUri}
+              onMapPickerOpen={(target) => setMapPickerFor(target)}
             />
           )}
 
@@ -510,6 +468,7 @@ type StepAddressesProps = {
   dropoffName: string;
   dropoffPhone: string;
   dropoffNotes: string;
+  dropoffVoiceUri: string | null;
   pickupCoords: Coords | null;
   dropoffCoords: Coords | null;
   onPickupAddressChange: (v: string) => void;
@@ -521,6 +480,7 @@ type StepAddressesProps = {
   onDropoffNameChange: (v: string) => void;
   onDropoffPhoneChange: (v: string) => void;
   onDropoffNotesChange: (v: string) => void;
+  onDropoffVoiceChange: (v: string | null) => void;
   onMapPickerOpen: (target: 'pickup' | 'dropoff') => void;
 };
 
@@ -560,6 +520,12 @@ function StepAddresses(p: StepAddressesProps) {
         <TextField label="Nom du destinataire" placeholder="Ex. Moussa Sow" value={p.dropoffName} onChangeText={p.onDropoffNameChange} autoCapitalize="words" />
         <TextField label="Téléphone du destinataire" placeholder="77 123 45 67" value={p.dropoffPhone} onChangeText={p.onDropoffPhoneChange} keyboardType="phone-pad" />
         <TextField label="Notes (optionnel)" placeholder="Étage, portail, repère…" value={p.dropoffNotes} onChangeText={p.onDropoffNotesChange} />
+        <VoiceRecorderWidget
+          voiceUri={p.dropoffVoiceUri}
+          onRecorded={p.onDropoffVoiceChange}
+          label="Ajouter un message vocal au livreur"
+          hint="Instructions de livraison, accès, particularités du colis…"
+        />
       </Card>
     </View>
   );
@@ -663,7 +629,12 @@ function CoordsStatus({ coords, onMapOpen }: { coords: Coords | null; onMapOpen:
 
 type RecorderStatus = 'idle' | 'recording' | 'recorded';
 
-function VoiceRecorderWidget({ voiceUri, onRecorded }: { voiceUri: string | null; onRecorded: (uri: string | null) => void }) {
+function VoiceRecorderWidget({ voiceUri, onRecorded, label, hint }: {
+  voiceUri: string | null;
+  onRecorded: (uri: string | null) => void;
+  label?: string;
+  hint?: string;
+}) {
   const [status,  setStatus]  = useState<RecorderStatus>(voiceUri ? 'recorded' : 'idle');
   const [seconds, setSeconds] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -710,7 +681,7 @@ function VoiceRecorderWidget({ voiceUri, onRecorded }: { voiceUri: string | null
     return (
       <Pressable style={recStyles.addBtn} onPress={startRecording}>
         <Mic size={16} color={colors.navy} />
-        <Text style={recStyles.addBtnText}>Ajouter un guidage vocal</Text>
+        <Text style={recStyles.addBtnText}>{label ?? 'Ajouter un guidage vocal'}</Text>
       </Pressable>
     );
   }
@@ -723,7 +694,7 @@ function VoiceRecorderWidget({ voiceUri, onRecorded }: { voiceUri: string | null
           <Text style={recStyles.recLabel}>Enregistrement en cours</Text>
           <Text style={recStyles.recTimer}>{fmt(seconds)}</Text>
         </View>
-        <Text style={recStyles.recHint}>Décrivez l'accès à voix haute (portail, étage, repère…)</Text>
+        <Text style={recStyles.recHint}>{hint ?? "Décrivez l'accès à voix haute (portail, étage, repère…)"}</Text>
         <Pressable style={recStyles.stopBtn} onPress={stopRecording}>
           <MicOff size={16} color={colors.white} />
           <Text style={recStyles.stopBtnText}>Arrêter</Text>
@@ -850,7 +821,6 @@ function StepParcelType({ parcelType, setParcelType, expectedIdType, setExpected
           <Text style={styles.warningText}>
             {parcelType === 'valeur_elevee' && 'Suivi GPS renforcé tout au long du trajet.'}
             {parcelType === 'confidentiel'  && 'Seul le livreur assigné connaît le contenu.'}
-            {parcelType === 'fragile'       && 'Manipulation avec précaution renforcée.'}
             {parcelType === 'standard'      && 'Livraison standard SECULIV.'}
           </Text>
         </View>
