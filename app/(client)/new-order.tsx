@@ -266,7 +266,13 @@ export default function NewOrderScreen() {
     let dropoffVoicePath: string | undefined;
     if (dropoffVoiceUri) {
       const uploadResult = await uploadVoiceGuidance(dropoffVoiceUri);
-      if ('path' in uploadResult) dropoffVoicePath = uploadResult.path;
+      if ('path' in uploadResult) {
+        dropoffVoicePath = uploadResult.path;
+      } else {
+        setSubmitting(false);
+        setError(`Message vocal non envoyé : ${uploadResult.error}. Réessaie ou supprime le message.`);
+        return;
+      }
     }
 
     const { data: newOrder, error: insertError } = await supabase
