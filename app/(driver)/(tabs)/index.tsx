@@ -795,12 +795,10 @@ function CurrentCourseCard({
             <KeyRound size={16} color={colors.navy} />
             <Text style={styles.codeTitle}>Code de validation</Text>
           </View>
-          {order.dropoff.voice_guidance_url ? (
-            <VoiceGuidancePlayer
-              storagePath={order.dropoff.voice_guidance_url}
-              label="Message vocal du client"
-            />
-          ) : null}
+          <VoiceGuidancePlayer
+            storagePath={order.dropoff.voice_guidance_url}
+            label="Message vocal du client"
+          />
           <TextField
             label="Code du destinataire (4 chiffres)"
             placeholder="••••"
@@ -885,9 +883,7 @@ function SensitiveDeliveryFlow({
         <View style={sensStyles.stepBlock}>
           <Text style={sensStyles.stepTitle}>Code secret</Text>
           <Text style={sensStyles.stepDesc}>Demandez au destinataire le code à 4 chiffres que l&apos;expéditeur lui a communiqué.</Text>
-          {voiceUrl ? (
-            <VoiceGuidancePlayer storagePath={voiceUrl} label="Message vocal du client" />
-          ) : null}
+          <VoiceGuidancePlayer storagePath={voiceUrl} label="Message vocal du client" />
           <TextField
             label="Code (4 chiffres)"
             placeholder="••••"
@@ -949,13 +945,14 @@ const sensStyles = StyleSheet.create({
 
 // ─── Lecteur guidage vocal ────────────────────────────────────────────────────
 
-function VoiceGuidancePlayer({ storagePath, label }: { storagePath: string; label?: string }) {
+function VoiceGuidancePlayer({ storagePath, label }: { storagePath: string | null | undefined; label?: string }) {
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
-  const [loading,   setLoading]   = useState(true);
+  const [loading,   setLoading]   = useState(!!storagePath);
   const [urlError,  setUrlError]  = useState(false);
   const [hasPlayed, setHasPlayed] = useState(false);
 
   useEffect(() => {
+    if (!storagePath) { setLoading(false); setUrlError(false); setSignedUrl(null); return; }
     setLoading(true);
     setUrlError(false);
     setSignedUrl(null);
@@ -964,13 +961,22 @@ function VoiceGuidancePlayer({ storagePath, label }: { storagePath: string; labe
       .createSignedUrl(storagePath, 7200)
       .then(({ data, error }) => {
         if (data?.signedUrl) setSignedUrl(data.signedUrl);
-        else { console.warn('[VoiceGuidancePlayer] URL error:', error?.message); setUrlError(true); }
+        else { console.warn('[VGP]', error?.message); setUrlError(true); }
         setLoading(false);
       });
   }, [storagePath]);
 
   const player    = useAudioPlayer(signedUrl ?? '');
   const isPlaying = player.playing;
+
+  if (!storagePath) {
+    return (
+      <View style={[vpStyles.btn, vpStyles.btnNone]}>
+        <VolumeX size={16} color={colors.muted} />
+        <Text style={vpStyles.noneText}>Aucun message vocal du client</Text>
+      </View>
+    );
+  }
 
   if (loading) {
     return (
@@ -983,36 +989,26 @@ function VoiceGuidancePlayer({ storagePath, label }: { storagePath: string; labe
 
   if (urlError || !signedUrl) {
     return (
-      <View style={[vpStyles.btn, vpStyles.btnError]}>
-        <Volume2 size={16} color={colors.muted} />
-        <Text style={vpStyles.errorText}>Message vocal indisponible</Text>
+      <View style={[vpStyles.btn, vpStyles.btnNone]}>
+        <VolumeX size={16} color={colors.muted} />
+        <Text style={vpStyles.noneText}>Message vocal indisponible</Text>
       </View>
     );
   }
 
   return (
     <Pressable
-      style={vpStyles.btn}
+      style={[vpStyles.btn, vpStyles.btnActive]}
       onPress={() => {
-        if (isPlaying) {
-          player.pause();
-        } else {
-          player.seekTo(0);
-          player.play();
-          setHasPlayed(true);
-        }
+        if (isPlaying) { player.pause(); }
+        else { player.seekTo(0); player.play(); setHasPlayed(true); }
       }}
     >
-      {isPlaying ? <Pause size={16} color={colors.navy} /> : <Play size={16} color={colors.navy} />}
-      <Text style={vpStyles.text}>
-        {isPlaying
-          ? 'Pause'
-          : hasPlayed
-            ? `Réécouter : ${label ?? 'message vocal'}`
-            : `Écouter : ${label ?? 'message vocal'}`
-        }
+      {isPlaying ? <Pause size={18} color={colors.white} /> : <Play size={18} color={colors.white} />}
+      <Text style={vpStyles.textActive}>
+        {isPlaying ? 'Pause' : hasPlayed ? `Réécouter le message` : `Écouter le message vocal`}
       </Text>
-      <Volume2 size={14} color={colors.muted} />
+      <Volume2 size={14} color={colors.white} />
     </Pressable>
   );
 }
@@ -1020,15 +1016,15 @@ function VoiceGuidancePlayer({ storagePath, label }: { storagePath: string; labe
 const vpStyles = StyleSheet.create({
   btn: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
-    paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
-    backgroundColor: '#E8EDF5', borderRadius: radius.md,
-    borderWidth: 1, borderColor: '#C5D0E0',
-    marginTop: spacing.xs,
+    paddingHorizontal: spacing.md, paddingVertical: 12,
+    borderRadius: radius.md, borderWidth: 1, borderColor: '#C5D0E0',
+    backgroundColor: '#E8EDF5',
   },
-  btnError: { backgroundColor: '#F4F5F7', borderColor: colors.line },
-  text:        { flex: 1, fontSize: 13, fontWeight: '600', color: colors.navy },
+  btnActive: { backgroundColor: colors.navy, borderColor: colors.navy },
+  btnNone:   { backgroundColor: '#F4F5F7', borderColor: colors.line },
+  textActive:  { flex: 1, fontSize: 14, fontWeight: '700', color: colors.white },
+  noneText:    { flex: 1, fontSize: 13, color: colors.muted },
   loadingText: { flex: 1, fontSize: 13, color: colors.muted },
-  errorText:   { flex: 1, fontSize: 13, color: colors.muted },
 });
 
 // ─── UpcomingRow ──────────────────────────────────────────────────────────────
