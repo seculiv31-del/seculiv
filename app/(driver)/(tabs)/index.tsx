@@ -252,7 +252,7 @@ export default function DriverCoursesScreen() {
   }, []);
 
   useFocusEffect(useCallback(() => {
-    loadOrders();
+    loadOrders(true);
     getDriverPosition();
   }, [loadOrders, getDriverPosition]));
 
