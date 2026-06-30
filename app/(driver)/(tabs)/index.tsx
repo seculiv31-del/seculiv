@@ -204,9 +204,9 @@ export default function DriverCoursesScreen() {
   const [updating, setUpdating]           = useState(false);
   const [sensStep, setSensStep]           = useState<SensStep>(null);
 
-  const loadOrders = useCallback(async () => {
+  const loadOrders = useCallback(async (silent = false) => {
     if (!driver) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     setError(null);
 
     const [myRes, availRes] = await Promise.all([
@@ -556,7 +556,7 @@ export default function DriverCoursesScreen() {
               onValidateSensitiveCode={() => handleValidateSensitiveCode(current)}
               onIdVerified={() => handleIdVerified(current)}
               onIdError={(msg) => setActionError(msg)}
-              onPhotoSuccess={loadOrders}
+              onPhotoSuccess={() => loadOrders(true)}
             />
           </>
         )}
@@ -755,12 +755,6 @@ function CurrentCourseCard({
             {order.pickup.notes && <Text style={styles.addressNotes}>{order.pickup.notes}</Text>}
           </View>
         </View>
-        {order.pickup.voice_guidance_url && (
-          <VoiceGuidancePlayer
-            storagePath={order.pickup.voice_guidance_url}
-            label="instructions d'accès (enlèvement)"
-          />
-        )}
         <View style={styles.addressRow}>
           <MapPin size={18} color={colors.green} style={styles.addressIcon} />
           <View style={styles.addressTexts}>
@@ -776,12 +770,6 @@ function CurrentCourseCard({
             </View>
           </View>
         </View>
-        {order.dropoff.voice_guidance_url && (
-          <VoiceGuidancePlayer
-            storagePath={order.dropoff.voice_guidance_url}
-            label="Message vocal de l'expéditeur"
-          />
-        )}
       </View>
 
       {isEnlevement && <PhotoCapture orderId={order.id} type="before" onSuccess={onPhotoSuccess} />}
@@ -797,6 +785,7 @@ function CurrentCourseCard({
           onValidateSensitiveCode={onValidateSensitiveCode}
           onIdVerified={onIdVerified}
           onIdError={onIdError}
+          voiceUrl={order.dropoff.voice_guidance_url}
         />
       )}
 
@@ -806,6 +795,12 @@ function CurrentCourseCard({
             <KeyRound size={16} color={colors.navy} />
             <Text style={styles.codeTitle}>Code de validation</Text>
           </View>
+          {order.dropoff.voice_guidance_url ? (
+            <VoiceGuidancePlayer
+              storagePath={order.dropoff.voice_guidance_url}
+              label="Message vocal du client"
+            />
+          ) : null}
           <TextField
             label="Code du destinataire (4 chiffres)"
             placeholder="••••"
@@ -837,11 +832,12 @@ type SensitiveDeliveryFlowProps = {
   onValidateSensitiveCode: () => void;
   onIdVerified: () => void;
   onIdError: (msg: string) => void;
+  voiceUrl?: string;
 };
 
 function SensitiveDeliveryFlow({
   order, sensStep, codeInput, onCodeChange, updating, actionError,
-  onValidateSensitiveCode, onIdVerified, onIdError,
+  onValidateSensitiveCode, onIdVerified, onIdError, voiceUrl,
 }: SensitiveDeliveryFlowProps) {
   const steps = [
     { key: 'code_exp', label: 'Code secret'           },
@@ -889,6 +885,9 @@ function SensitiveDeliveryFlow({
         <View style={sensStyles.stepBlock}>
           <Text style={sensStyles.stepTitle}>Code secret</Text>
           <Text style={sensStyles.stepDesc}>Demandez au destinataire le code à 4 chiffres que l&apos;expéditeur lui a communiqué.</Text>
+          {voiceUrl ? (
+            <VoiceGuidancePlayer storagePath={voiceUrl} label="Message vocal du client" />
+          ) : null}
           <TextField
             label="Code (4 chiffres)"
             placeholder="••••"
