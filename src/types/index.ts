@@ -126,6 +126,18 @@ export type Certificate = {
   created_at: string;
 };
 
+export type RaterRole = 'expediteur' | 'destinataire';
+
+export type DeliveryRating = {
+  id: string;
+  order_id: string;
+  rated_by: string;
+  rater_role: RaterRole;
+  score: number;
+  comment: string | null;
+  created_at: string;
+};
+
 export type AnomalyType = 'detour' | 'arret_prolonge' | 'coupure_gps' | 'echec_code';
 export type AnomalySeverity = 'faible' | 'elevee';
 

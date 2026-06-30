@@ -1,8 +1,7 @@
 import { Redirect } from 'expo-router';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { Logo } from '@/src/components/Logo';
 import { useAuth } from '@/src/lib/AuthContext';
 import { colors } from '@/src/theme/colors';
 import { spacing } from '@/src/theme/spacing';
@@ -44,7 +43,11 @@ function SplashView() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        <Logo size={160} />
+        <Image
+          source={require('../assets/images/logo-blanc-v2.png')}
+          style={styles.logo}
+          resizeMode="contain"
+        />
         <Text style={styles.slogan}>La sécurité n’est pas une option</Text>
 
         <View style={styles.statusRow}>
@@ -82,5 +85,9 @@ const styles = StyleSheet.create({
   statusText: {
     fontSize: 13,
     color: '#9FB0CC',
+  },
+  logo: {
+    width: 280,
+    height: 320,
   },
 });

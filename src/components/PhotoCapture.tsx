@@ -34,14 +34,33 @@ export default function PhotoCapture({ orderId, type, onSuccess, disabled = fals
   const hint =
     type === 'before' ? 'Colis fermé, boîte visible' : 'Colis remis au destinataire';
 
+  async function doUpload(uri: string) {
+    setState('uploading');
+    setErrorMsg(null);
+    try {
+      const { signedUrl } = await uploadDeliveryPhoto(orderId, type, uri);
+      setState('done');
+      onSuccess(signedUrl);
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : "Erreur lors de l'envoi.");
+      setState('error');
+    }
+  }
+
   async function handlePress() {
     if (disabled || state === 'uploading' || state === 'done') return;
+
+    // Retry upload sans rouvrir la caméra
+    if (state === 'error' && capturedUri) {
+      await doUpload(capturedUri);
+      return;
+    }
 
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert(
         'Caméra requise',
-        'SECŪL·iV a besoin de la caméra pour photographier la preuve de livraison. Activez-la dans les Réglages de l’appareil.',
+        `SECŪL·iV a besoin de la caméra pour photographier la preuve de livraison. Activez-la dans les Réglages de l'appareil.`,
         [{ text: 'OK' }]
       );
       return;
@@ -54,7 +73,6 @@ export default function PhotoCapture({ orderId, type, onSuccess, disabled = fals
     setCapturedUri(uri);
 
     const now = new Date();
-    // Géocodage inverse asynchrone : la ville apparaît dès qu'elle est disponible.
     let cityLabel = 'Dakar';
     try {
       const last = await Location.getLastKnownPositionAsync();
@@ -76,57 +94,56 @@ export default function PhotoCapture({ orderId, type, onSuccess, disabled = fals
         ` · ${cityLabel}`
     );
 
-    setState('uploading');
-    setErrorMsg(null);
-
-    try {
-      const { signedUrl } = await uploadDeliveryPhoto(orderId, type, uri);
-      setState('done');
-      onSuccess(signedUrl);
-    } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : "Erreur lors de l’envoi.");
-      setState('error');
-    }
+    await doUpload(uri);
   }
 
-  if (state === 'done' && capturedUri) {
+  // Photo capturée : afficher immédiatement avec overlay selon l'état
+  if (capturedUri) {
     return (
-      <View style={styles.container}>
+      <Pressable
+        style={styles.container}
+        onPress={state === 'error' ? handlePress : undefined}
+        disabled={state !== 'error'}
+      >
         <Image source={{ uri: capturedUri }} style={styles.preview} resizeMode="cover" />
-        <View style={styles.doneOverlay}>
-          <CheckCircle2 size={20} color="#fff" />
-          {timestamp && <Text style={styles.timestamp}>{timestamp}</Text>}
-        </View>
-      </View>
+        {state === 'uploading' && (
+          <View style={styles.uploadingOverlay}>
+            <ActivityIndicator color="#fff" size="small" />
+            <Text style={styles.uploadingText}>Envoi en cours…</Text>
+          </View>
+        )}
+        {state === 'done' && (
+          <View style={styles.doneOverlay}>
+            <CheckCircle2 size={20} color="#fff" />
+            {timestamp && <Text style={styles.timestamp}>{timestamp}</Text>}
+          </View>
+        )}
+        {state === 'error' && (
+          <View style={styles.errorOverlay}>
+            <Text style={styles.errorOverlayText}>{errorMsg ?? 'Erreur envoi'}</Text>
+            <Text style={styles.retryText}>Appuyer pour réessayer</Text>
+          </View>
+        )}
+      </Pressable>
     );
   }
 
   return (
     <Pressable
-      style={[styles.container, styles.idle, (disabled || state === 'uploading') && styles.dimmed]}
+      style={[styles.container, styles.idle]}
       onPress={handlePress}
-      disabled={disabled || state === 'uploading'}
+      disabled={disabled}
     >
-      {state === 'uploading' ? (
-        <View style={styles.centeredContent}>
-          <ActivityIndicator color={colors.line} size="large" />
-          <Text style={styles.uploadingText}>Envoi en cours…</Text>
-        </View>
-      ) : (
-        <View style={styles.centeredContent}>
-          <View style={styles.badgeWrap}>
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>REQUIS</Text>
-            </View>
+      <View style={styles.centeredContent}>
+        <View style={styles.badgeWrap}>
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>REQUIS</Text>
           </View>
-          <Camera size={36} color={state === 'error' ? '#D14343' : colors.muted} />
-          <Text style={styles.tapText}>Appuyer pour photographier</Text>
-          <Text style={styles.hintText}>{hint}</Text>
-          {state === 'error' && errorMsg && (
-            <Text style={styles.errorText}>{errorMsg}</Text>
-          )}
         </View>
-      )}
+        <Camera size={36} color={colors.muted} />
+        <Text style={styles.tapText}>Appuyer pour photographier</Text>
+        <Text style={styles.hintText}>{hint}</Text>
+      </View>
     </Pressable>
   );
 }
@@ -190,10 +207,41 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: spacing.xs,
   },
+  uploadingOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingVertical: spacing.sm,
+    gap: spacing.sm,
+  },
   uploadingText: {
     fontSize: 13,
-    color: colors.line,
+    color: '#fff',
     fontWeight: '600',
+  },
+  errorOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    backgroundColor: 'rgba(209,67,67,0.85)',
+    paddingVertical: spacing.sm,
+    gap: 2,
+  },
+  errorOverlayText: {
+    fontSize: 12,
+    color: '#fff',
+    fontWeight: '700',
+  },
+  retryText: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.85)',
   },
   preview: {
     width: '100%',

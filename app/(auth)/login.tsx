@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { router } from 'expo-router';
 import {
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -12,11 +13,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/src/components/Button';
-import { Logo } from '@/src/components/Logo';
 import { TextField } from '@/src/components/TextField';
 import { useAuth } from '@/src/lib/AuthContext';
 import { colors } from '@/src/theme/colors';
 import { radius, spacing } from '@/src/theme/spacing';
+
+const logoColor = require('@/assets/images/logo-color.png');
+const logo3 = require('@/assets/images/logo-3.png');
 
 type Mode = 'login' | 'signup';
 
@@ -82,9 +85,13 @@ export default function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-        <SafeAreaView edges={['top']} style={styles.banner}>
-          <Logo size={130} />
-          <Text style={styles.slogan}>La sécurité n'est pas une option</Text>
+        <SafeAreaView edges={['top']} style={[styles.banner, styles.bannerLight]}>
+          <Image
+            source={mode === 'signup' ? logoColor : logo3}
+            style={styles.logoColor}
+            resizeMode="contain"
+          />
+
         </SafeAreaView>
 
         <View style={styles.card}>
@@ -183,7 +190,7 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   flex: {
     flex: 1,
-    backgroundColor: colors.navy,
+    backgroundColor: colors.white,
   },
   scrollContent: {
     flexGrow: 1,
@@ -199,6 +206,16 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#9FB0CC',
     letterSpacing: 0.5,
+  },
+  sloganDark: {
+    color: colors.muted,
+  },
+  bannerLight: {
+    backgroundColor: colors.white,
+  },
+  logoColor: {
+    width: 200,
+    height: 200,
   },
   card: {
     flex: 1,

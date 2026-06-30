@@ -2,6 +2,7 @@
   "expo": {
     "name": "seculiv",
     "slug": "seculiv",
+    "owner": "seculiv31",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon-only.png",
@@ -26,6 +27,7 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "pan",
       "predictiveBackGestureEnabled": false
     },
     "web": {
@@ -67,6 +69,11 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "37837ec7-0fa3-418d-8db9-322535e4d5b3"
+      }
     }
   }
 }

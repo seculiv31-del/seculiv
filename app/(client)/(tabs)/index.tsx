@@ -3,7 +3,7 @@ import {
   Bell,
   Camera,
   CheckCircle,
-  CreditCard,
+  PenLine,
   EyeOff,
   Gem,
   Lock,
@@ -12,19 +12,20 @@ import {
   ShieldCheck,
   Users,
 } from 'lucide-react-native';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/src/components/Button';
-import { Logo } from '@/src/components/Logo';
 import { useAuth } from '@/src/lib/AuthContext';
+
+const logo3 = require('@/assets/images/logo-3.png');
 import { colors } from '@/src/theme/colors';
 import { radius, spacing } from '@/src/theme/spacing';
 
 const SECURITY_HIGHLIGHTS = [
   { key: 'code',  icon: Shield,    label: 'Code secret',   tint: colors.greenSoft,  iconColor: colors.green },
   { key: 'photo', icon: Camera,    label: 'Double photo',  tint: colors.navySoft,   iconColor: colors.white },
-  { key: 'funds', icon: CreditCard,label: 'Fonds bloqués', tint: '#F6EFD9',         iconColor: colors.gold  },
+  { key: 'funds', icon: PenLine,    label: 'Signature digitale', tint: '#F6EFD9',   iconColor: colors.gold  },
 ] as const;
 
 const FORMULAS = [
@@ -78,7 +79,7 @@ export default function ClientHomeScreen() {
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
-          <Logo size={80} />
+          <Image source={logo3} style={styles.headerLogo} resizeMode="contain" />
           <Pressable style={styles.bellButton}>
             <Bell size={20} color={colors.navy} />
           </Pressable>
@@ -139,6 +140,7 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: colors.bg },
   content: { padding: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.lg },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  headerLogo: { width: 80, height: 80 },
   bellButton: {
     width: 40, height: 40, borderRadius: radius.pill,
     backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center',

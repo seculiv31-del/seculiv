@@ -6,6 +6,7 @@ import {
   Banknote,
   Check,
   CheckCircle2,
+  KeyRound,
   Lock,
   MapPin,
   Mic,
@@ -140,7 +141,6 @@ export default function NewOrderScreen() {
   const [dropoffName,    setDropoffName]    = useState('');
   const [dropoffPhone,   setDropoffPhone]   = useState('');
   const [dropoffNotes,   setDropoffNotes]   = useState('');
-  const [pickupVoiceUri,  setPickupVoiceUri]  = useState<string | null>(null);
   const [dropoffVoiceUri, setDropoffVoiceUri] = useState<string | null>(null);
 
   // Coordonnées — effacées dès que le texte d'adresse change
@@ -165,6 +165,9 @@ export default function NewOrderScreen() {
   // UI
   const [error,      setError]      = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Code choisi par le client (standard / valeur_elevee / confidentiel)
+  const [clientCode, setClientCode] = useState('');
 
   // Confirmation
   const [orderConfirmed,    setOrderConfirmed]    = useState(false);
@@ -252,14 +255,13 @@ export default function NewOrderScreen() {
   async function handleSubmit() {
     if (!user || !parcelType || !priceBreakdown) return;
 
+    if (!isSensible && !/^\d{4}$/.test(clientCode)) {
+      setError('Choisis un code à 4 chiffres à communiquer au destinataire.');
+      return;
+    }
+
     setSubmitting(true);
     setError(null);
-
-    let voiceGuidancePath: string | undefined;
-    if (pickupVoiceUri) {
-      const uploadResult = await uploadVoiceGuidance(pickupVoiceUri);
-      if ('path' in uploadResult) voiceGuidancePath = uploadResult.path;
-    }
 
     let dropoffVoicePath: string | undefined;
     if (dropoffVoiceUri) {
@@ -274,7 +276,6 @@ export default function NewOrderScreen() {
         pickup: {
           address:            pickupAddress.trim(),
           notes:              pickupNotes.trim() || undefined,
-          voice_guidance_url: voiceGuidancePath,
           ...(pickupCoords  ? { lat: pickupCoords.lat,  lng: pickupCoords.lng  } : {}),
         },
         dropoff: {
@@ -315,9 +316,14 @@ export default function NewOrderScreen() {
       setConfirmedCode(codeExp ?? null);
       setConfirmedCodeDest(codeDest ?? null);
     } else {
-      const { data: secretCode } = await supabase.rpc('generate_secret_code', { p_order_id: newOrder.id });
-      if (typeof secretCode === 'string') await storeSecretCode(newOrder.id, secretCode);
-      setConfirmedCode(typeof secretCode === 'string' ? secretCode : null);
+      const { error: storeErr } = await supabase.rpc('store_custom_secret_code', { p_order_id: newOrder.id, p_code: clientCode });
+      if (storeErr) {
+        setSubmitting(false);
+        setError('Le code de livraison n\'a pas pu être enregistré. Réessaie.');
+        return;
+      }
+      await storeSecretCode(newOrder.id, clientCode);
+      setConfirmedCode(clientCode);
     }
 
     setConfirmedPrice(priceBreakdown.total);
@@ -389,7 +395,6 @@ export default function NewOrderScreen() {
             <StepAddresses
               pickupAddress={pickupAddress}
               pickupNotes={pickupNotes}
-              pickupVoiceUri={pickupVoiceUri}
               dropoffAddress={dropoffAddress}
               dropoffName={dropoffName}
               dropoffPhone={dropoffPhone}
@@ -400,7 +405,6 @@ export default function NewOrderScreen() {
               onPickupAddressChange={(v) => { setPickupAddress(v);  setPickupCoords(null);  }}
               onPickupSelect={(addr, coords) => { setPickupAddress(addr);  setPickupCoords(coords);  }}
               onPickupNotesChange={setPickupNotes}
-              onPickupVoiceChange={setPickupVoiceUri}
               onDropoffAddressChange={(v) => { setDropoffAddress(v); setDropoffCoords(null); }}
               onDropoffSelect={(addr, coords) => { setDropoffAddress(addr); setDropoffCoords(coords); }}
               onDropoffNameChange={setDropoffName}
@@ -429,6 +433,8 @@ export default function NewOrderScreen() {
             <StepPayment
               priceBreakdown={priceBreakdown}
               isSensible={isSensible}
+              clientCode={clientCode}
+              onClientCodeChange={setClientCode}
             />
           )}
         </ScrollView>
@@ -463,7 +469,6 @@ export default function NewOrderScreen() {
 type StepAddressesProps = {
   pickupAddress: string;
   pickupNotes: string;
-  pickupVoiceUri: string | null;
   dropoffAddress: string;
   dropoffName: string;
   dropoffPhone: string;
@@ -474,7 +479,6 @@ type StepAddressesProps = {
   onPickupAddressChange: (v: string) => void;
   onPickupSelect: (address: string, coords: Coords) => void;
   onPickupNotesChange: (v: string) => void;
-  onPickupVoiceChange: (v: string | null) => void;
   onDropoffAddressChange: (v: string) => void;
   onDropoffSelect: (address: string, coords: Coords) => void;
   onDropoffNameChange: (v: string) => void;
@@ -501,7 +505,6 @@ function StepAddresses(p: StepAddressesProps) {
         />
         <CoordsStatus coords={p.pickupCoords} onMapOpen={() => p.onMapPickerOpen('pickup')} />
         <TextField label="Notes (optionnel)" placeholder="Étage, portail, repère…" value={p.pickupNotes} onChangeText={p.onPickupNotesChange} />
-        <VoiceRecorderWidget voiceUri={p.pickupVoiceUri} onRecorded={p.onPickupVoiceChange} />
       </Card>
 
       <Card style={styles.addressCard}>
@@ -895,9 +898,13 @@ function SensibleFeature({ text }: { text: string }) {
 function StepPayment({
   priceBreakdown,
   isSensible,
+  clientCode,
+  onClientCodeChange,
 }: {
   priceBreakdown: PriceBreakdown | null;
   isSensible: boolean;
+  clientCode: string;
+  onClientCodeChange: (v: string) => void;
 }) {
   if (!priceBreakdown) {
     return (
@@ -915,6 +922,27 @@ function StepPayment({
           <Lock size={14} color={VIOLET} />
           <Text style={styles.sensibleSummaryText}>Livraison sensible — contrôles renforcés</Text>
         </View>
+      )}
+
+      {/* Code de livraison (non-sensible uniquement) */}
+      {!isSensible && (
+        <Card style={styles.codeChoiceCard}>
+          <View style={styles.codeChoiceHeader}>
+            <KeyRound size={16} color={colors.navy} />
+            <Text style={styles.codeChoiceTitle}>Code de livraison</Text>
+          </View>
+          <Text style={styles.codeChoiceDesc}>
+            Choisissez un code à 4 chiffres. Communiquez-le au destinataire avant la livraison — il le remettra au livreur à son arrivée.
+          </Text>
+          <TextField
+            label="Votre code (4 chiffres) *"
+            placeholder="Ex. 2847"
+            value={clientCode}
+            onChangeText={(v) => onClientCodeChange(v.replace(/\D/g, '').slice(0, 4))}
+            keyboardType="number-pad"
+            maxLength={4}
+          />
+        </Card>
       )}
 
       {/* Détail du prix */}
@@ -975,12 +1003,14 @@ function OrderConfirmedScreen({ price, code, codeDest, isSensible, onTrack }: {
         {code && (
           <View style={styles.confirmedCodeBox}>
             <Text style={styles.confirmedCodeLabel}>
-              {isSensible ? 'Votre code expéditeur' : 'Votre code secret'}
+              {isSensible ? 'Votre code expéditeur' : 'Votre code de livraison'}
             </Text>
             <Text style={styles.confirmedCode}>{code.split('').join(' ')}</Text>
-            {isSensible && (
-              <Text style={styles.confirmedCodeHint}>Communiquez ce code au livreur à son arrivée.</Text>
-            )}
+            <Text style={styles.confirmedCodeHint}>
+              {isSensible
+                ? 'Communiquez ce code au livreur à son arrivée.'
+                : 'Partagez ce code avec le destinataire.\nIl le communiquera au livreur lors de la remise.'}
+            </Text>
           </View>
         )}
 
@@ -1116,6 +1146,10 @@ const styles = StyleSheet.create({
   // Step 3 — récapitulatif
   sensibleSummaryBadge: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, backgroundColor: VIOLET_SOFT, borderRadius: radius.md, padding: spacing.md, borderWidth: 1, borderColor: '#D9CEEF' },
   sensibleSummaryText:  { fontSize: 13, fontWeight: '700', color: VIOLET },
+  codeChoiceCard:   { gap: spacing.md, borderWidth: 1.5, borderColor: colors.navy },
+  codeChoiceHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  codeChoiceTitle:  { fontSize: 14, fontWeight: '700', color: colors.navy },
+  codeChoiceDesc:   { fontSize: 12, color: colors.muted, lineHeight: 18 },
 
   breakdownCard:    { gap: spacing.sm },
   breakdownTitle:   { fontSize: 12, fontWeight: '700', color: colors.muted, textTransform: 'uppercase' },

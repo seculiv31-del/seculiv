@@ -1,4 +1,4 @@
-import type { PillTone } from '@/src/components/Pill';
+﻿import type { PillTone } from '@/src/components/Pill';
 import type { DriverStatus, OrderStatus } from '@/src/types';
 
 export type DriverAction = {
@@ -12,7 +12,7 @@ export type DriverAction = {
 // `arrivee` exige la saisie du code de validation avant de passer à `livree`
 // (vérifié côté serveur via la RPC validate_secret_code).
 const DRIVER_ACTIONS: Partial<Record<OrderStatus, DriverAction>> = {
-  assignee: { label: 'J’ai récupéré le colis', nextStatus: 'enlevement', nextDriverStatus: 'en_course' },
+  assignee: { label: "J'ai récupéré le colis", nextStatus: 'enlevement', nextDriverStatus: 'en_course' },
   enlevement: { label: 'Je suis en route', nextStatus: 'en_transport' },
   en_transport: { label: 'Je suis arrivé', nextStatus: 'arrivee' },
   arrivee: {

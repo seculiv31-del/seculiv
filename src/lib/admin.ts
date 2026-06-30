@@ -71,7 +71,7 @@ export type OrderRow = {
 export async function listOrders(status?: OrderStatus): Promise<OrderRow[]> {
   let query = supabase
     .from('orders')
-    .select('id, client_id, driver_id, pickup, dropoff, parcel_type, protection_level, price_fcfa, status, payment_status, created_at, is_sensitive, id_photo_url, profiles:driver_id(full_name)')
+    .select('id, client_id, driver_id, pickup, dropoff, parcel_type, protection_level, price_fcfa, status, payment_status, created_at, is_sensitive, id_photo_url, drivers:driver_id(profiles:profile_id(full_name))')
     .order('created_at', { ascending: false });
 
   if (status) query = query.eq('status', status);
@@ -79,7 +79,7 @@ export async function listOrders(status?: OrderStatus): Promise<OrderRow[]> {
   const { data } = await query;
   return (data ?? []).map((row: any) => ({
     ...row,
-    driver_name: row.profiles?.full_name ?? null,
+    driver_name: (row.drivers as any)?.profiles?.full_name ?? null,
   })) as OrderRow[];
 }
 
@@ -127,6 +127,7 @@ export type DriverRow = {
   status:      DriverStatus;
   is_verified: boolean;
   order_count: number;
+  avg_rating:  number | null;
 };
 
 export async function listDrivers(): Promise<DriverRow[]> {
@@ -221,7 +222,7 @@ export type IncidentRow = {
 export async function listIncidents(): Promise<IncidentRow[]> {
   const { data } = await supabase
     .from('incidents')
-    .select('id, order_id, type, status, description, created_at, orders(driver_id, profiles:driver_id(full_name))')
+    .select('id, order_id, type, status, description, created_at, orders(driver_id, drivers:driver_id(profiles:profile_id(full_name)))')
     .order('created_at', { ascending: false });
 
   return (data ?? []).map((row) => ({
@@ -231,7 +232,7 @@ export async function listIncidents(): Promise<IncidentRow[]> {
     status:      row.status as IncidentStatus,
     description: row.description,
     created_at:  row.created_at,
-    driver_name: (row.orders as { profiles?: { full_name: string | null } | null } | null)?.profiles?.full_name ?? null,
+    driver_name: (row.orders as any)?.drivers?.profiles?.full_name ?? null,
   }));
 }
 

@@ -2,8 +2,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useAudioPlayer } from 'expo-audio';
 import * as Location from 'expo-location';
 import {
-  Banknote, CheckCircle2, ChevronRight, Clock, KeyRound, Lock, MapPin,
-  MessageSquare, Navigation, Package, Pause, PenLine, Phone, Play, Radio,
+  CheckCircle2, Clock, KeyRound, Lock, MapPin,
+  Navigation, Package, Pause, Phone, Play, Radio,
   RefreshCw, Shield, Volume2, VolumeX,
 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -13,6 +13,7 @@ import {
   Alert,
   Animated,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -28,7 +29,6 @@ import IdVerification from '@/src/components/IdVerification';
 import PhotoCapture from '@/src/components/PhotoCapture';
 import { Pill } from '@/src/components/Pill';
 import { SectionTitle } from '@/src/components/SectionTitle';
-import SignaturePad from '@/src/components/SignaturePad';
 import { TextField } from '@/src/components/TextField';
 import { useAuth } from '@/src/lib/AuthContext';
 import { getDriverAction } from '@/src/lib/driverActions';
@@ -36,7 +36,6 @@ import { useGpsTracking } from '@/src/lib/useGpsTracking';
 import { useVoiceGuidance } from '@/src/lib/useVoiceGuidance';
 import { getOrderStatusInfo, PARCEL_TYPE_LABELS } from '@/src/lib/orderStatus';
 import { supabase } from '@/src/lib/supabase';
-import { uploadSignature } from '@/src/lib/uploadSignature';
 import { colors } from '@/src/theme/colors';
 import { radius, spacing } from '@/src/theme/spacing';
 import type { Order } from '@/src/types';
@@ -46,7 +45,7 @@ const VIOLET_SOFT = '#F0ECFA';
 
 const GPS_ACTIVE_STATUSES: Order['status'][] = ['enlevement', 'en_transport', 'arrivee'];
 
-type SensStep = 'code_exp' | 'code_dest' | 'id_scan' | null;
+type SensStep = 'code_exp' | 'id_scan' | null;
 
 function formatOrderId(id: string): string { return `#${id.slice(0, 8).toUpperCase()}`; }
 function formatPrice(fcfa: number): string { return `${fcfa.toLocaleString('fr-FR')} F`; }
@@ -202,16 +201,8 @@ export default function DriverCoursesScreen() {
   const [accepting, setAccepting]         = useState<string | null>(null);
   const [codeInput, setCodeInput]         = useState('');
   const [actionError, setActionError]     = useState<string | null>(null);
-  const [paymentError, setPaymentError]   = useState<string | null>(null);
   const [updating, setUpdating]           = useState(false);
-  const [paymentUpdating, setPaymentUpdating] = useState(false);
-
-  const [signatureStep, setSignatureStep]     = useState<'pad' | null>(null);
-  const [recipientName, setRecipientName]     = useState('');
-  const [signatureUploading, setSignatureUploading] = useState(false);
-  const [signatureError, setSignatureError]   = useState<string | null>(null);
-
-  const [sensStep, setSensStep] = useState<SensStep>(null);
+  const [sensStep, setSensStep]           = useState<SensStep>(null);
 
   const loadOrders = useCallback(async () => {
     if (!driver) return;
@@ -224,7 +215,7 @@ export default function DriverCoursesScreen() {
         .select('*')
         .eq('driver_id', driver.id)
         .not('status', 'eq', 'annulee')
-        .or('status.neq.livree,payment_status.eq.en_attente')
+        .not('status', 'eq', 'livree')
         .order('created_at', { ascending: true }),
       supabase
         .from('orders')
@@ -265,8 +256,6 @@ export default function DriverCoursesScreen() {
     getDriverPosition();
   }, [loadOrders, getDriverPosition]));
 
-  // Abonnement realtime : recharge automatiquement quand une commande est
-  // créée ou modifiée (nouveau client, livreur qui accepte, etc.)
   useEffect(() => {
     if (!driver) return;
 
@@ -286,7 +275,6 @@ export default function DriverCoursesScreen() {
     };
   }, [driver, loadOrders]);
 
-  // Trie les courses disponibles par distance croissante
   const sortedAvailableOrders = useMemo(() => {
     if (!driverPosition) return availableOrders;
     return [...availableOrders].sort((a, b) => {
@@ -322,10 +310,6 @@ export default function DriverCoursesScreen() {
   useEffect(() => {
     setCodeInput('');
     setActionError(null);
-    setPaymentError(null);
-    setSignatureStep(null);
-    setRecipientName('');
-    setSignatureError(null);
     if (current?.is_sensitive && current.status === 'arrivee') {
       setSensStep('code_exp');
     } else {
@@ -339,7 +323,6 @@ export default function DriverCoursesScreen() {
     if (!driver) return;
     setAccepting(order.id);
 
-    // Concurrence optimiste : on ne met à jour que si la course est encore libre
     const { data: updated, error: updateErr } = await supabase
       .from('orders')
       .update({ driver_id: driver.id, status: 'assignee' })
@@ -393,10 +376,14 @@ export default function DriverCoursesScreen() {
     }
 
     if (action.nextStatus === 'en_transport') {
-      supabase.functions.invoke('send-push', { body: { profile_id: order.client_id, title: '🏍️ Votre livreur arrive', body: 'Votre colis est en route. Préparez votre code secret.', data: { orderId: order.id }, category: 'proximity' } }).catch(() => {});
+      supabase.functions.invoke('send-push', {
+        body: { profile_id: order.client_id, title: '🏍️ Votre livreur arrive', body: 'Votre colis est en route vers sa destination.', data: { orderId: order.id }, category: 'proximity' },
+      }).catch(() => {});
     }
     if (action.nextStatus === 'arrivee') {
-      supabase.functions.invoke('send-push', { body: { profile_id: order.client_id, title: '📍 Votre livreur est arrivé', body: 'Communiquez votre code secret au livreur pour finaliser la livraison.', data: { orderId: order.id }, category: 'delivery' } }).catch(() => {});
+      supabase.functions.invoke('send-push', {
+        body: { profile_id: order.client_id, title: '📍 Votre livreur est arrivé', body: "Votre livreur est arrivé à destination. La livraison est sur le point d'être finalisée.", data: { orderId: order.id }, category: 'delivery' },
+      }).catch(() => {});
       if (order.is_sensitive) setSensStep('code_exp');
     }
 
@@ -412,21 +399,32 @@ export default function DriverCoursesScreen() {
     const { data: isValid, error: validateError } = await supabase.rpc('validate_secret_code', { p_order_id: order.id, p_code: code });
     if (validateError) { setUpdating(false); setActionError('La vérification du code a échoué. Vérifie ta connexion et réessaie.'); return; }
     if (!isValid) { setUpdating(false); setActionError('Code incorrect. Demande au destinataire de te communiquer le bon code.'); return; }
-    const { error: updateError } = await supabase.from('orders').update({ status: 'livree' }).eq('id', order.id);
+    const { error: updateError } = await supabase.from('orders').update({
+      status: 'livree',
+      payment_status: 'paye',
+      paid_at: new Date().toISOString(),
+    }).eq('id', order.id);
     if (updateError) { setUpdating(false); setActionError('Code correct mais la mise à jour a échoué. Réessaie.'); return; }
-    supabase.functions.invoke('send-push', { body: { profile_id: order.client_id, title: '✅ Livraison validée', body: 'Votre colis a bien été remis. Le certificat sera disponible après le paiement.', data: { orderId: order.id }, category: 'delivery' } }).catch(() => {});
+    supabase.functions.invoke('generate-certificate', { body: { order_id: order.id } }).catch(() => {});
+    if (driver) {
+      await supabase.from('drivers').update({ status: 'disponible' }).eq('id', driver.id);
+      await refreshDriver();
+    }
+    supabase.functions.invoke('send-push', {
+      body: { profile_id: order.client_id, title: '✅ Colis livré !', body: 'Votre colis a été livré avec succès. Le certificat de livraison est disponible.', data: { orderId: order.id }, category: 'delivery' },
+    }).catch(() => {});
     setCodeInput('');
     setUpdating(false);
     await loadOrders();
   }
 
-  async function handleValidateSensitiveCode(order: Order, codeType: 'expediteur' | 'destinataire') {
+  async function handleValidateSensitiveCode(order: Order) {
     const code = codeInput.trim();
     if (code.length !== 4) { setActionError('Entre le code à 4 chiffres.'); return; }
     setActionError(null);
     setUpdating(true);
     const { data, error: fnErr } = await supabase.functions.invoke('verify-delivery-code', {
-      body: { order_id: order.id, code, code_type: codeType },
+      body: { order_id: order.id, code, code_type: 'expediteur' },
     });
     setUpdating(false);
     if (fnErr || !data?.valid) {
@@ -434,18 +432,14 @@ export default function DriverCoursesScreen() {
       return;
     }
     setCodeInput('');
-    if (codeType === 'expediteur') {
-      setSensStep('code_dest');
-    } else {
-      setSensStep('id_scan');
-    }
+    setSensStep('id_scan');
   }
 
   async function handleIdVerified(order: Order) {
     setUpdating(true);
     const { error: updateErr } = await supabase
       .from('orders')
-      .update({ status: 'livree' })
+      .update({ status: 'livree', payment_status: 'paye', paid_at: new Date().toISOString() })
       .eq('id', order.id);
     setUpdating(false);
     if (updateErr) {
@@ -453,58 +447,20 @@ export default function DriverCoursesScreen() {
       return;
     }
     setSensStep(null);
+    supabase.functions.invoke('generate-certificate', { body: { order_id: order.id } }).catch(() => {});
+    if (driver) {
+      await supabase.from('drivers').update({ status: 'disponible' }).eq('id', driver.id);
+      await refreshDriver();
+    }
     supabase.functions.invoke('send-push', {
       body: {
         profile_id: order.client_id,
         title: '🔒 Remise sécurisée validée',
-        body: 'Tous les contrôles renforcés sont passés. Votre colis a été remis en toute sécurité.',
+        body: 'Tous les contrôles renforcés ont été passés. Votre colis a été livré en toute sécurité.',
         data: { orderId: order.id },
         category: 'delivery',
       },
     }).catch(() => {});
-    await loadOrders();
-  }
-
-  async function handleSignatureOK(order: Order, base64DataUrl: string) {
-    const name = recipientName.trim() || order.dropoff.name || 'Destinataire';
-    setSignatureError(null);
-    setSignatureUploading(true);
-    const result = await uploadSignature(order.id, base64DataUrl, name);
-    setSignatureUploading(false);
-    if ('error' in result) { setSignatureError(result.error); return; }
-    setSignatureStep(null);
-    setRecipientName('');
-    await loadOrders();
-  }
-
-  async function handleCollect(order: Order) {
-    if (!driver) return;
-    setPaymentError(null);
-    setPaymentUpdating(true);
-    const { error: payError } = await supabase.from('orders').update({ payment_status: 'paye', paid_at: new Date().toISOString() }).eq('id', order.id);
-    if (payError) { setPaymentUpdating(false); setPaymentError('La confirmation du paiement a échoué. Réessaie.'); return; }
-    supabase.functions.invoke('generate-certificate', { body: { order_id: order.id } }).catch(() => {});
-    const { error: driverError } = await supabase.from('drivers').update({ status: 'disponible' }).eq('id', driver.id);
-    if (driverError) {
-      setPaymentUpdating(false);
-      setPaymentError("Paiement enregistré mais ton statut n'a pas pu être mis à jour. Va dans \"Mon compte\" pour le corriger.");
-      await loadOrders(); return;
-    }
-    await refreshDriver();
-    setPaymentUpdating(false);
-    await loadOrders();
-  }
-
-  async function handlePaymentProblem(order: Order) {
-    if (!driver) return;
-    setPaymentError(null);
-    setPaymentUpdating(true);
-    await supabase.from('incidents').insert({ order_id: order.id, reported_by: driver.profile_id, type: 'autre', description: 'Problème de paiement à la livraison' });
-    const { error: payError } = await supabase.from('orders').update({ payment_status: 'probleme' }).eq('id', order.id);
-    if (payError) { setPaymentUpdating(false); setPaymentError('Le signalement a échoué. Réessaie.'); return; }
-    await supabase.from('drivers').update({ status: 'disponible' }).eq('id', driver.id);
-    await refreshDriver();
-    setPaymentUpdating(false);
     await loadOrders();
   }
 
@@ -544,7 +500,11 @@ export default function DriverCoursesScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
+      >
 
         {/* ── Course en cours ─────────────────────────────────────────────── */}
         {current && (
@@ -589,25 +549,14 @@ export default function DriverCoursesScreen() {
               codeInput={codeInput}
               onCodeChange={setCodeInput}
               actionError={actionError}
-              paymentError={paymentError}
               updating={updating}
-              paymentUpdating={paymentUpdating}
-              signatureStep={signatureStep}
-              recipientName={recipientName}
-              signatureUploading={signatureUploading}
-              signatureError={signatureError}
               sensStep={sensStep}
               onAdvance={() => handleAdvance(current)}
               onValidateCode={() => handleValidateCode(current)}
-              onValidateSensitiveCode={(ct) => handleValidateSensitiveCode(current, ct)}
+              onValidateSensitiveCode={() => handleValidateSensitiveCode(current)}
               onIdVerified={() => handleIdVerified(current)}
               onIdError={(msg) => setActionError(msg)}
-              onCollect={() => handleCollect(current)}
-              onPaymentProblem={() => handlePaymentProblem(current)}
               onPhotoSuccess={loadOrders}
-              onSignatureMethodSelect={() => setSignatureStep('pad')}
-              onRecipientNameChange={setRecipientName}
-              onSignatureOK={(b64) => handleSignatureOK(current, b64)}
             />
           </>
         )}
@@ -674,7 +623,6 @@ function AvailableOrderCard({
 
   return (
     <Card style={styles.availCard}>
-      {/* En-tête : ID + badge distance */}
       <View style={styles.availCardHeader}>
         <View style={styles.availCardLeft}>
           <Text style={styles.availId}>{formatOrderId(order.id)}</Text>
@@ -693,7 +641,6 @@ function AvailableOrderCard({
         )}
       </View>
 
-      {/* Tags : type + prix + ETA */}
       <View style={styles.tagsRow}>
         <Pill label={PARCEL_TYPE_LABELS[order.parcel_type]} tone="gray" />
         <Pill label={formatPrice(order.price_fcfa)} tone="navy" />
@@ -705,7 +652,6 @@ function AvailableOrderCard({
         )}
       </View>
 
-      {/* Itinéraire */}
       <View style={styles.routeBlock}>
         <View style={styles.routeRow}>
           <View style={[styles.routeDot, styles.routeDotPickup]} />
@@ -755,48 +701,29 @@ type CurrentCourseCardProps = {
   codeInput: string;
   onCodeChange: (v: string) => void;
   actionError: string | null;
-  paymentError: string | null;
   updating: boolean;
-  paymentUpdating: boolean;
-  signatureStep: 'pad' | null;
-  recipientName: string;
-  signatureUploading: boolean;
-  signatureError: string | null;
   sensStep: SensStep;
   onAdvance: () => void;
   onValidateCode: () => void;
-  onValidateSensitiveCode: (codeType: 'expediteur' | 'destinataire') => void;
+  onValidateSensitiveCode: () => void;
   onIdVerified: () => void;
   onIdError: (msg: string) => void;
-  onCollect: () => void;
-  onPaymentProblem: () => void;
   onPhotoSuccess: () => void;
-  onSignatureMethodSelect: () => void;
-  onRecipientNameChange: (name: string) => void;
-  onSignatureOK: (base64: string) => void;
 };
 
 function CurrentCourseCard({
   order, codeInput, onCodeChange,
-  actionError, paymentError, updating, paymentUpdating,
-  signatureStep, recipientName, signatureUploading, signatureError,
-  sensStep,
+  actionError, updating, sensStep,
   onAdvance, onValidateCode, onValidateSensitiveCode, onIdVerified, onIdError,
-  onCollect, onPaymentProblem, onPhotoSuccess,
-  onSignatureMethodSelect, onRecipientNameChange, onSignatureOK,
+  onPhotoSuccess,
 }: CurrentCourseCardProps) {
-  const status  = getOrderStatusInfo(order.status);
-  const action  = getDriverAction(order.status);
+  const status = getOrderStatusInfo(order.status);
+  const action = getDriverAction(order.status);
 
-  const isEnlevement    = order.status === 'enlevement';
-  const isArrivee       = order.status === 'arrivee';
-  const isLivreePayPending = order.status === 'livree' && order.payment_status === 'en_attente';
-  const needsPhotoAfter = isLivreePayPending && !order.photo_after_url;
-  const needsSignature  = isLivreePayPending && !!order.photo_after_url && !order.signature_url;
-  const needsPaymentConfirm = isLivreePayPending && !!order.photo_after_url && !!order.signature_url;
-
-  const buttonDisabled   = isEnlevement && !order.photo_before_url;
-  const showRegularButton = !!action && !isArrivee && !isLivreePayPending;
+  const isEnlevement      = order.status === 'enlevement';
+  const isArrivee         = order.status === 'arrivee';
+  const buttonDisabled    = isEnlevement && !order.photo_before_url && Platform.OS !== 'web';
+  const showRegularButton = !!action && !isArrivee;
   const showSensitiveFlow = order.is_sensitive && isArrivee;
 
   return (
@@ -880,7 +807,7 @@ function CurrentCourseCard({
             <Text style={styles.codeTitle}>Code de validation</Text>
           </View>
           <TextField
-            label="Code communiqué par le destinataire"
+            label="Code du destinataire (4 chiffres)"
             placeholder="••••"
             value={codeInput}
             onChangeText={onCodeChange}
@@ -890,40 +817,7 @@ function CurrentCourseCard({
         </View>
       )}
 
-      {needsPhotoAfter && <PhotoCapture orderId={order.id} type="after" onSuccess={onPhotoSuccess} />}
-
-      {needsSignature && signatureStep === null && (
-        <SignatureMethodSection
-          defaultName={order.dropoff.name}
-          recipientName={recipientName}
-          onNameChange={onRecipientNameChange}
-          onSelectManuscrite={onSignatureMethodSelect}
-          error={signatureError}
-        />
-      )}
-      {needsSignature && signatureStep === 'pad' && (
-        <View style={styles.sigPadBlock}>
-          <SignaturePad
-            recipientName={recipientName.trim() || order.dropoff.name}
-            onOK={onSignatureOK}
-          />
-          {signatureUploading && <ActivityIndicator color={colors.green} style={{ marginTop: spacing.sm }} />}
-          {signatureError && <Text style={styles.actionError}>{signatureError}</Text>}
-        </View>
-      )}
-
-      {needsPaymentConfirm && (
-        <EncaissementSection
-          price={order.price_fcfa}
-          isSensible={order.is_sensitive}
-          error={paymentError}
-          loading={paymentUpdating}
-          onCollect={onCollect}
-          onPaymentProblem={onPaymentProblem}
-        />
-      )}
-
-      {actionError && <Text style={styles.actionError}>{actionError}</Text>}
+      {actionError && !showSensitiveFlow && <Text style={styles.actionError}>{actionError}</Text>}
 
       {showRegularButton && <Button title={action.label} onPress={onAdvance} loading={updating} disabled={buttonDisabled} />}
       {!order.is_sensitive && isArrivee && <Button title="Valider le code" onPress={onValidateCode} loading={updating} />}
@@ -940,7 +834,7 @@ type SensitiveDeliveryFlowProps = {
   onCodeChange: (v: string) => void;
   updating: boolean;
   actionError: string | null;
-  onValidateSensitiveCode: (ct: 'expediteur' | 'destinataire') => void;
+  onValidateSensitiveCode: () => void;
   onIdVerified: () => void;
   onIdError: (msg: string) => void;
 };
@@ -950,9 +844,8 @@ function SensitiveDeliveryFlow({
   onValidateSensitiveCode, onIdVerified, onIdError,
 }: SensitiveDeliveryFlowProps) {
   const steps = [
-    { key: 'code_exp',  label: 'Code expéditeur'  },
-    { key: 'code_dest', label: 'Code destinataire' },
-    { key: 'id_scan',   label: 'Vérification identité' },
+    { key: 'code_exp', label: 'Code secret'           },
+    { key: 'id_scan',  label: 'Vérification identité' },
   ];
 
   const currentIdx = steps.findIndex((s) => s.key === sensStep);
@@ -967,23 +860,23 @@ function SensitiveDeliveryFlow({
       <View style={sensStyles.checklist}>
         {steps.map((s, i) => {
           const done    = i < currentIdx;
-          const current = i === currentIdx;
+          const active  = i === currentIdx;
           return (
             <View key={s.key} style={sensStyles.checkRow}>
               <View style={[
                 sensStyles.checkDot,
-                done    && sensStyles.checkDotDone,
-                current && sensStyles.checkDotActive,
+                done   && sensStyles.checkDotDone,
+                active && sensStyles.checkDotActive,
               ]}>
                 {done
                   ? <CheckCircle2 size={14} color={VIOLET} />
-                  : <Text style={[sensStyles.checkNum, current && sensStyles.checkNumActive]}>{i + 1}</Text>
+                  : <Text style={[sensStyles.checkNum, active && sensStyles.checkNumActive]}>{i + 1}</Text>
                 }
               </View>
               <Text style={[
                 sensStyles.checkLabel,
-                done    && sensStyles.checkLabelDone,
-                current && sensStyles.checkLabelActive,
+                done   && sensStyles.checkLabelDone,
+                active && sensStyles.checkLabelActive,
               ]}>
                 {s.label}
               </Text>
@@ -994,10 +887,10 @@ function SensitiveDeliveryFlow({
 
       {sensStep === 'code_exp' && (
         <View style={sensStyles.stepBlock}>
-          <Text style={sensStyles.stepTitle}>Code expéditeur</Text>
-          <Text style={sensStyles.stepDesc}>Demandez à la personne présente le code à 4 chiffres de l&apos;expéditeur.</Text>
+          <Text style={sensStyles.stepTitle}>Code secret</Text>
+          <Text style={sensStyles.stepDesc}>Demandez au destinataire le code à 4 chiffres que l&apos;expéditeur lui a communiqué.</Text>
           <TextField
-            label="Code expéditeur (4 chiffres)"
+            label="Code (4 chiffres)"
             placeholder="••••"
             value={codeInput}
             onChangeText={onCodeChange}
@@ -1005,24 +898,7 @@ function SensitiveDeliveryFlow({
             maxLength={4}
           />
           {actionError && <Text style={sensStyles.error}>{actionError}</Text>}
-          <Button title="Valider le code expéditeur" onPress={() => onValidateSensitiveCode('expediteur')} loading={updating} />
-        </View>
-      )}
-
-      {sensStep === 'code_dest' && (
-        <View style={sensStyles.stepBlock}>
-          <Text style={sensStyles.stepTitle}>Code destinataire</Text>
-          <Text style={sensStyles.stepDesc}>Demandez au destinataire son code à 4 chiffres (reçu de l&apos;expéditeur).</Text>
-          <TextField
-            label="Code destinataire (4 chiffres)"
-            placeholder="••••"
-            value={codeInput}
-            onChangeText={onCodeChange}
-            keyboardType="number-pad"
-            maxLength={4}
-          />
-          {actionError && <Text style={sensStyles.error}>{actionError}</Text>}
-          <Button title="Valider le code destinataire" onPress={() => onValidateSensitiveCode('destinataire')} loading={updating} />
+          <Button title="Valider le code" onPress={onValidateSensitiveCode} loading={updating} />
         </View>
       )}
 
@@ -1076,19 +952,44 @@ const sensStyles = StyleSheet.create({
 
 function VoiceGuidancePlayer({ storagePath, label }: { storagePath: string; label?: string }) {
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
+  const [loading,   setLoading]   = useState(true);
+  const [urlError,  setUrlError]  = useState(false);
   const [hasPlayed, setHasPlayed] = useState(false);
 
   useEffect(() => {
+    setLoading(true);
+    setUrlError(false);
+    setSignedUrl(null);
     supabase.storage
       .from('delivery-photos')
       .createSignedUrl(storagePath, 7200)
-      .then(({ data }) => { if (data) setSignedUrl(data.signedUrl); });
+      .then(({ data, error }) => {
+        if (data?.signedUrl) setSignedUrl(data.signedUrl);
+        else { console.warn('[VoiceGuidancePlayer] URL error:', error?.message); setUrlError(true); }
+        setLoading(false);
+      });
   }, [storagePath]);
 
   const player    = useAudioPlayer(signedUrl ?? '');
   const isPlaying = player.playing;
 
-  if (!signedUrl) return null;
+  if (loading) {
+    return (
+      <View style={vpStyles.btn}>
+        <ActivityIndicator size="small" color={colors.navy} />
+        <Text style={vpStyles.loadingText}>Chargement du message vocal…</Text>
+      </View>
+    );
+  }
+
+  if (urlError || !signedUrl) {
+    return (
+      <View style={[vpStyles.btn, vpStyles.btnError]}>
+        <Volume2 size={16} color={colors.muted} />
+        <Text style={vpStyles.errorText}>Message vocal indisponible</Text>
+      </View>
+    );
+  }
 
   return (
     <Pressable
@@ -1108,8 +1009,8 @@ function VoiceGuidancePlayer({ storagePath, label }: { storagePath: string; labe
         {isPlaying
           ? 'Pause'
           : hasPlayed
-            ? `Réécouter : ${label ?? "instructions d'accès"}`
-            : `Écouter : ${label ?? "instructions d'accès"}`
+            ? `Réécouter : ${label ?? 'message vocal'}`
+            : `Écouter : ${label ?? 'message vocal'}`
         }
       </Text>
       <Volume2 size={14} color={colors.muted} />
@@ -1125,82 +1026,11 @@ const vpStyles = StyleSheet.create({
     borderWidth: 1, borderColor: '#C5D0E0',
     marginTop: spacing.xs,
   },
-  text: { flex: 1, fontSize: 13, fontWeight: '600', color: colors.navy },
+  btnError: { backgroundColor: '#F4F5F7', borderColor: colors.line },
+  text:        { flex: 1, fontSize: 13, fontWeight: '600', color: colors.navy },
+  loadingText: { flex: 1, fontSize: 13, color: colors.muted },
+  errorText:   { flex: 1, fontSize: 13, color: colors.muted },
 });
-
-// ─── Encaissement ─────────────────────────────────────────────────────────────
-
-function EncaissementSection({
-  price, isSensible, error, loading, onCollect, onPaymentProblem,
-}: {
-  price: number;
-  isSensible: boolean;
-  error: string | null;
-  loading: boolean;
-  onCollect: () => void;
-  onPaymentProblem: () => void;
-}) {
-  return (
-    <View style={styles.encaissGap}>
-      {isSensible && (
-        <View style={styles.sensibleEncaissHeader}>
-          <CheckCircle2 size={16} color={VIOLET} />
-          <Text style={styles.sensibleEncaissText}>Remise sécurisée validée — tous les contrôles ont passé</Text>
-        </View>
-      )}
-      <Card style={styles.encaissCard}>
-        <Text style={styles.encaissLabel}>Montant à encaisser</Text>
-        <Text style={styles.encaissAmount}>{price.toLocaleString('fr-FR')} F</Text>
-        <Text style={styles.encaissMode}>Paiement en espèces</Text>
-      </Card>
-      <View style={styles.cashBox}>
-        <Banknote size={18} color="#2E7D43" />
-        <Text style={styles.cashBoxText}>Récupère {price.toLocaleString('fr-FR')} F auprès du destinataire avant de confirmer.</Text>
-      </View>
-      {error && <Text style={styles.actionError}>{error}</Text>}
-      <Button title="Paiement reçu · finaliser" onPress={onCollect} loading={loading} />
-      <Button title="Signaler un problème de paiement" variant="ghost" onPress={onPaymentProblem} loading={loading} />
-    </View>
-  );
-}
-
-// ─── Signature ────────────────────────────────────────────────────────────────
-
-function SignatureMethodSection({ defaultName, recipientName, onNameChange, onSelectManuscrite, error }: {
-  defaultName: string;
-  recipientName: string;
-  onNameChange: (name: string) => void;
-  onSelectManuscrite: () => void;
-  error: string | null;
-}) {
-  return (
-    <View style={styles.sigSection}>
-      <View style={styles.sigHeader}>
-        <PenLine size={16} color={colors.navy} />
-        <Text style={styles.sigTitle}>Signature du destinataire</Text>
-      </View>
-      <TextField label="Nom du destinataire" placeholder={defaultName} value={recipientName} onChangeText={onNameChange} />
-      <Text style={styles.sigMethodLabel}>Mode de signature</Text>
-      <Pressable style={styles.sigMethodRow} onPress={onSelectManuscrite}>
-        <View style={styles.sigMethodIcon}><PenLine size={20} color={colors.navy} /></View>
-        <View style={styles.sigMethodTexts}>
-          <Text style={styles.sigMethodName}>Signature manuscrite</Text>
-          <Text style={styles.sigMethodDesc}>Le destinataire signe à l&apos;écran</Text>
-        </View>
-        <ChevronRight size={16} color={colors.navy} />
-      </Pressable>
-      <View style={[styles.sigMethodRow, styles.sigMethodDisabled]}>
-        <View style={styles.sigMethodIcon}><MessageSquare size={20} color={colors.muted} /></View>
-        <View style={styles.sigMethodTexts}>
-          <Text style={[styles.sigMethodName, styles.sigMethodNameDisabled]}>Code OTP SMS</Text>
-          <Text style={styles.sigMethodDesc}>Envoi d&apos;un code au téléphone du destinataire</Text>
-        </View>
-        <View style={styles.soonBadge}><Text style={styles.soonText}>Bientôt</Text></View>
-      </View>
-      {error && <Text style={styles.actionError}>{error}</Text>}
-    </View>
-  );
-}
 
 // ─── UpcomingRow ──────────────────────────────────────────────────────────────
 
@@ -1227,7 +1057,6 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 18, fontWeight: '800', color: colors.ink },
   emptySubtitle: { fontSize: 14, color: colors.muted, textAlign: 'center' },
 
-  // Section header avec bouton refresh
   availHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   refreshBtn: {
     width: 32, height: 32, borderRadius: radius.sm,
@@ -1235,7 +1064,6 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
 
-  // Bannière position en cours
   locationBanner: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
     backgroundColor: '#F4F5F7', borderRadius: radius.md,
@@ -1243,7 +1071,6 @@ const styles = StyleSheet.create({
   },
   locationBannerText: { fontSize: 12, color: colors.muted },
 
-  // Courses disponibles
   availableList: { gap: spacing.md },
   availCard: { gap: spacing.md },
   availCardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -1263,7 +1090,6 @@ const styles = StyleSheet.create({
   },
   etaText: { fontSize: 12, fontWeight: '600', color: colors.muted },
 
-  // Itinéraire (disponibles)
   routeBlock: { gap: 0 },
   routeRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
   routeDot: { width: 12, height: 12, borderRadius: 6, marginTop: 3, flexShrink: 0 },
@@ -1281,12 +1107,9 @@ const styles = StyleSheet.create({
   routeContact: { fontSize: 12, fontWeight: '700', color: colors.ink },
   routeCallBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   routePhone: { fontSize: 12, fontWeight: '700', color: colors.green },
-  suspendedNote: {
-    backgroundColor: '#FBE7E7', borderRadius: radius.md, padding: spacing.md,
-  },
+  suspendedNote: { backgroundColor: '#FBE7E7', borderRadius: radius.md, padding: spacing.md },
   suspendedNoteText: { fontSize: 12, color: '#D14343', fontWeight: '600' },
 
-  // Course en cours
   currentCard: { gap: spacing.md },
   currentHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   currentHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
@@ -1314,40 +1137,10 @@ const styles = StyleSheet.create({
   codeHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   codeTitle: { fontSize: 14, fontWeight: '700', color: colors.ink },
   actionError: { fontSize: 12, color: '#D14343' },
-  encaissGap: { gap: spacing.md },
-  sensibleEncaissHeader: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
-    backgroundColor: VIOLET_SOFT, borderRadius: radius.md, padding: spacing.md,
-    borderWidth: 1, borderColor: '#D9CEEF',
-  },
-  sensibleEncaissText: { flex: 1, fontSize: 12, fontWeight: '700', color: VIOLET },
-  encaissCard: { alignItems: 'center', gap: spacing.xs, paddingVertical: spacing.lg },
-  encaissLabel: { fontSize: 12, fontWeight: '700', color: colors.muted, textTransform: 'uppercase' },
-  encaissAmount: { fontSize: 32, fontWeight: '800', color: colors.ink },
-  encaissMode: { fontSize: 12, color: colors.muted },
-  cashBox: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, backgroundColor: colors.greenSoft, borderRadius: radius.md, padding: spacing.md },
-  cashBoxText: { flex: 1, fontSize: 13, fontWeight: '600', color: '#2E7D43' },
 
-  // À venir
   upcomingList: { gap: spacing.sm },
   upcomingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   upcomingTexts: { gap: 2 },
   upcomingId: { fontSize: 14, fontWeight: '700', color: colors.ink },
   upcomingAddress: { fontSize: 12, color: colors.muted },
-
-  // Signature
-  sigSection: { gap: spacing.sm },
-  sigHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  sigTitle: { fontSize: 14, fontWeight: '700', color: colors.ink },
-  sigMethodLabel: { fontSize: 12, fontWeight: '700', color: colors.muted, textTransform: 'uppercase', marginTop: spacing.xs },
-  sigMethodRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, padding: spacing.md, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.bg },
-  sigMethodDisabled: { opacity: 0.5 },
-  sigMethodIcon: { width: 36, height: 36, borderRadius: radius.sm, backgroundColor: '#E8EDF5', alignItems: 'center', justifyContent: 'center' },
-  sigMethodTexts: { flex: 1, gap: 2 },
-  sigMethodName: { fontSize: 14, fontWeight: '700', color: colors.ink },
-  sigMethodNameDisabled: { color: colors.muted },
-  sigMethodDesc: { fontSize: 12, color: colors.muted },
-  soonBadge: { backgroundColor: colors.greenSoft, borderRadius: radius.pill, paddingHorizontal: spacing.sm, paddingVertical: 3 },
-  soonText: { fontSize: 11, fontWeight: '700', color: colors.green },
-  sigPadBlock: { gap: spacing.sm },
 });

@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
-import { Bell, Bike, ChevronRight, Clock, ShieldCheck, ShieldX } from 'lucide-react-native';
-import { useState } from 'react';
+import { Bell, Bike, ChevronRight, Clock, ShieldCheck, ShieldX, Star } from 'lucide-react-native';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -15,6 +15,35 @@ import { colors } from '@/src/theme/colors';
 import { radius, spacing } from '@/src/theme/spacing';
 import type { DriverStatus } from '@/src/types';
 
+function useDriverAvgRating(driverId: string | undefined): number | null {
+  const [avg, setAvg] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!driverId) return;
+    (async () => {
+      const { data: orders } = await supabase
+        .from('orders')
+        .select('id')
+        .eq('driver_id', driverId)
+        .eq('status', 'livree');
+
+      const ids = (orders ?? []).map((o) => o.id as string);
+      if (ids.length === 0) return;
+
+      const { data: ratings } = await supabase
+        .from('delivery_ratings')
+        .select('score')
+        .in('order_id', ids);
+
+      const scores = (ratings ?? []).map((r) => r.score as number);
+      if (scores.length === 0) return;
+      setAvg(scores.reduce((a, b) => a + b, 0) / scores.length);
+    })();
+  }, [driverId]);
+
+  return avg;
+}
+
 function getInitials(fullName: string | null): string {
   const parts = fullName?.trim().split(/\s+/).filter(Boolean) ?? [];
   if (parts.length === 0) return '?';
@@ -25,6 +54,7 @@ function getInitials(fullName: string | null): string {
 export default function DriverAccountScreen() {
   const { profile, driver, refreshDriver, signOut } = useAuth();
   const [toggling, setToggling] = useState(false);
+  const avgRating = useDriverAvgRating(driver?.id);
 
   const isOnline = driver?.status === 'disponible';
   const canToggle = driver?.status === 'disponible' || driver?.status === 'hors_ligne';
@@ -51,6 +81,12 @@ export default function DriverAccountScreen() {
           <View style={styles.profileTexts}>
             <Text style={styles.profileName}>{profile?.full_name || 'Livreur SECULIV'}</Text>
             <Text style={styles.profileSubtitle}>{profile?.phone || '—'} · Livreur</Text>
+            {avgRating !== null && (
+              <View style={styles.ratingRow}>
+                <Star size={12} color={colors.gold} fill={colors.gold} />
+                <Text style={styles.ratingText}>{avgRating.toFixed(1)} / 5 · avis clients</Text>
+              </View>
+            )}
           </View>
         </Card>
 
@@ -150,6 +186,7 @@ const styles = StyleSheet.create({
   },
   profileTexts: {
     gap: 2,
+    flex: 1,
   },
   profileName: {
     fontSize: 16,
@@ -159,6 +196,17 @@ const styles = StyleSheet.create({
   profileSubtitle: {
     fontSize: 13,
     color: colors.muted,
+  },
+  ratingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 2,
+  },
+  ratingText: {
+    fontSize: 12,
+    color: colors.gold,
+    fontWeight: '600',
   },
   statusCard: {
     gap: spacing.md,

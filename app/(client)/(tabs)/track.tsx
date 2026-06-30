@@ -1,13 +1,14 @@
 import { useFocusEffect } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
 import { router } from 'expo-router';
-import { CheckCircle2, Circle, Clock, FileDown, KeyRound, MapPin } from 'lucide-react-native';
+import { CheckCircle2, Circle, Clock, FileDown, KeyRound, MapPin, Star } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Image,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -20,6 +21,7 @@ import { Button } from '@/src/components/Button';
 import { Card } from '@/src/components/Card';
 import DeliveryMap from '@/src/components/DeliveryMap';
 import { Pill } from '@/src/components/Pill';
+import { RatingModal } from '@/src/components/RatingModal';
 import { SectionTitle } from '@/src/components/SectionTitle';
 import { useAuth } from '@/src/lib/AuthContext';
 import { useDeliveryVoiceAlerts } from '@/src/lib/useDeliveryVoiceAlerts';
@@ -121,7 +123,7 @@ export default function ClientTrackScreen() {
 
   useEffect(() => {
     const codeOrderIds = orders
-      .filter((order) => isOrderActive(order.status) && order.status !== 'en_attente')
+      .filter((order) => isOrderActive(order.status))
       .map((order) => order.id);
 
     if (codeOrderIds.length === 0) return;
@@ -147,21 +149,19 @@ export default function ClientTrackScreen() {
           if (notifiedOrdersRef.current.has(updated.id)) return;
           notifiedOrdersRef.current.add(updated.id);
 
-          const code = await getSecretCode(updated.id);
-          if (!code) return;
-
-          const notifId = await Notifications.scheduleNotificationAsync({
-            content: {
-              title: '📦 Votre colis est arrivé !',
-              body: `Votre code de remise : ${code.split('').join(' — ')}`,
-              data: { orderId: updated.id, screen: 'track' },
-            },
-            trigger: null,
-          });
-
-          setTimeout(() => {
-            Notifications.dismissNotificationAsync(notifId).catch(() => {});
-          }, 10 * 60 * 1000);
+          if (Platform.OS !== 'web') {
+            const notifId = await Notifications.scheduleNotificationAsync({
+              content: {
+                title: '📦 Votre colis a été remis !',
+                body: 'La livraison a été validée avec succès. Merci de votre confiance.',
+                data: { orderId: updated.id, screen: 'track' },
+              },
+              trigger: null,
+            });
+            setTimeout(() => {
+              Notifications.dismissNotificationAsync(notifId).catch(() => {});
+            }, 10 * 60 * 1000);
+          }
 
           await loadOrders();
         }
@@ -230,6 +230,7 @@ export default function ClientTrackScreen() {
                   key={order.id}
                   order={order}
                   photoUrls={photoUrls[order.id]}
+                  userId={user?.id ?? ''}
                 />
               ))}
             </View>
@@ -378,18 +379,17 @@ function ActiveOrderCard({
       <View style={styles.secretBlock}>
         <View style={styles.secretHeader}>
           <KeyRound size={18} color={colors.navy} />
-          <Text style={styles.secretTitle}>Code de validation</Text>
+          <Text style={styles.secretTitle}>
+            {order.is_sensitive ? 'Code expéditeur' : 'Code de livraison'}
+          </Text>
         </View>
-        {order.status === 'en_attente' ? (
-          <>
-            <Text style={[styles.secretCode, styles.secretCodePlaceholder]}>— — —</Text>
-            <Text style={styles.secretHint}>{"Disponible dès qu'un livreur est assigné."}</Text>
-          </>
-        ) : secretCode ? (
+        {secretCode ? (
           <>
             <Text style={styles.secretCode}>{secretCode.split('').join(' ')}</Text>
             <Text style={styles.secretHint}>
-              Communique ce code au livreur uniquement à la remise du colis.
+              {order.is_sensitive
+                ? "Montrez ce code au livreur lors de l'enlèvement de votre colis."
+                : "Partage ce code avec le destinataire.\nIl le communiquera au livreur à la remise."}
             </Text>
           </>
         ) : (
@@ -408,14 +408,19 @@ function ActiveOrderCard({
 // ─── Ligne historique ─────────────────────────────────────────────────────────
 
 function HistoryRow({ order, photoUrls }: { order: Order; photoUrls?: PhotoUrls }) {
+  const { user } = useAuth();
   const status      = getOrderStatusInfo(order.status);
   const hasPhotos   = !!(photoUrls?.before || photoUrls?.after);
   const isDelivered = order.status === 'livree';
 
-  const [cert, setCert]           = useState<Certificate | null>(null);
+  const [cert, setCert]               = useState<Certificate | null>(null);
   const [certChecked, setCertChecked] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const stoppedRef = useRef(false);
+
+  // null = pas encore vérifié, false = pas encore noté, true = déjà noté
+  const [alreadyRated, setAlreadyRated] = useState<boolean | null>(null);
+  const [ratingVisible, setRatingVisible] = useState(false);
 
   // Poll la table certificates toutes les 5s jusqu'à ce que le certificat existe.
   useEffect(() => {
@@ -436,6 +441,32 @@ function HistoryRow({ order, photoUrls }: { order: Order; photoUrls?: PhotoUrls 
     const id = setInterval(() => { if (!stoppedRef.current) check(); }, 5000);
     return () => { stoppedRef.current = true; clearInterval(id); };
   }, [isDelivered, order.id]);
+
+  // Vérifie si l'expéditeur a déjà laissé un avis pour cette livraison.
+  useEffect(() => {
+    if (!isDelivered || !user) return;
+    supabase
+      .from('delivery_ratings')
+      .select('id')
+      .eq('order_id', order.id)
+      .eq('rated_by', user.id)
+      .eq('rater_role', 'expediteur')
+      .maybeSingle()
+      .then(({ data }) => setAlreadyRated(!!data));
+  }, [isDelivered, order.id, user]);
+
+  async function handleRatingSubmit(score: number, comment: string) {
+    if (!user) return;
+    await supabase.from('delivery_ratings').insert({
+      order_id:   order.id,
+      rated_by:   user.id,
+      rater_role: 'expediteur',
+      score,
+      comment: comment || null,
+    });
+    setAlreadyRated(true);
+    setRatingVisible(false);
+  }
 
   async function handleDownload() {
     if (!cert) return;
@@ -502,6 +533,29 @@ function HistoryRow({ order, photoUrls }: { order: Order; photoUrls?: PhotoUrls 
           </Text>
         </Pressable>
       )}
+
+      {isDelivered && alreadyRated === false && (
+        <Pressable
+          onPress={() => setRatingVisible(true)}
+          style={({ pressed }) => [styles.ratingButton, pressed && styles.certButtonPressed]}
+        >
+          <Star size={14} color={colors.gold} />
+          <Text style={styles.ratingButtonText}>Laisser un avis sur le livreur</Text>
+        </Pressable>
+      )}
+
+      {isDelivered && alreadyRated === true && (
+        <View style={styles.ratingDone}>
+          <Star size={12} color={colors.gold} fill={colors.gold} />
+          <Text style={styles.ratingDoneText}>Avis envoyé · Merci !</Text>
+        </View>
+      )}
+
+      <RatingModal
+        visible={ratingVisible}
+        onSubmit={handleRatingSubmit}
+        onSkip={() => setRatingVisible(false)}
+      />
     </View>
   );
 }
@@ -717,6 +771,36 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: colors.green,
+  },
+  ratingButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    marginTop: spacing.xs,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.gold,
+    backgroundColor: '#FDF8EC',
+  },
+  ratingButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.gold,
+  },
+  ratingDone: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  ratingDoneText: {
+    fontSize: 12,
+    color: colors.gold,
+    fontStyle: 'italic',
   },
   viewerBg: {
     flex: 1,

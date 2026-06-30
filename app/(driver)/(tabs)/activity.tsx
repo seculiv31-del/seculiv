@@ -1,6 +1,6 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { CheckCircle2, ShieldCheck } from 'lucide-react-native';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -12,6 +12,13 @@ import { supabase } from '@/src/lib/supabase';
 import { colors } from '@/src/theme/colors';
 import { spacing } from '@/src/theme/spacing';
 import type { Order } from '@/src/types';
+
+function trustScoreColor(score: number | null): string {
+  if (score === null || score === 0) return colors.muted;
+  if (score >= 70) return colors.green;
+  if (score >= 40) return colors.gold;
+  return '#E05252';
+}
 
 function formatOrderId(id: string): string {
   return `#${id.slice(0, 8).toUpperCase()}`;
@@ -35,6 +42,38 @@ export default function DriverActivityScreen() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [trustScore, setTrustScore] = useState<number | null>(null);
+
+  // Initialise le score depuis le profil chargé en session
+  useEffect(() => {
+    if (driver !== null) {
+      setTrustScore(driver.trust_score);
+    }
+  }, [driver]);
+
+  // Écoute les mises à jour du trust_score en temps réel
+  useEffect(() => {
+    if (!driver) return;
+
+    const channel = supabase
+      .channel(`driver-trust-${driver.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'drivers',
+          filter: `id=eq.${driver.id}`,
+        },
+        (payload) => {
+          const updated = payload.new as { trust_score: number };
+          setTrustScore(updated.trust_score);
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [driver]);
 
   const loadOrders = useCallback(async () => {
     if (!driver) return;
@@ -100,8 +139,8 @@ export default function DriverActivityScreen() {
             <Text style={styles.statLabel}>Livraisons</Text>
           </Card>
           <Card style={styles.statCard}>
-            <ShieldCheck size={20} color={colors.navy} />
-            <Text style={styles.statValue}>{driver?.trust_score ?? '—'}</Text>
+            <ShieldCheck size={20} color={trustScoreColor(trustScore)} />
+            <Text style={[styles.statValue, { color: trustScoreColor(trustScore) }]}>{trustScore ?? '—'}</Text>
             <Text style={styles.statLabel}>Score de confiance</Text>
           </Card>
         </View>
