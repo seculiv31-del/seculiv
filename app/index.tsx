@@ -48,8 +48,6 @@ function SplashView() {
           style={styles.logo}
           resizeMode="contain"
         />
-        <Text style={styles.slogan}>La sécurité n’est pas une option</Text>
-
         <View style={styles.statusRow}>
           <ActivityIndicator color={colors.green} />
           <Text style={styles.statusText}>Vérification de la session…</Text>
@@ -70,11 +68,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: spacing.md,
     paddingHorizontal: spacing.xl,
-  },
-  slogan: {
-    fontSize: 13,
-    color: '#9FB0CC',
-    letterSpacing: 0.5,
   },
   statusRow: {
     flexDirection: 'row',
