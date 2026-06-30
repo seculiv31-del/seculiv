@@ -266,7 +266,7 @@ export default function DriverCoursesScreen() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'orders' },
-        () => { loadOrders(); }
+        () => { loadOrders(true); }
       )
       .subscribe();
 
